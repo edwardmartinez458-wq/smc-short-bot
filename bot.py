@@ -1,5 +1,5 @@
 """
-SHORT Bot — Solo posiciones SHORT
+SMC Trading Bot — Smart Money Concepts
 Exchange: Binance Futures
 Estrategia: EMA21 + EMA89 + RSI14 (solo bajista)
 Servidor: Railway 24/7
@@ -47,14 +47,12 @@ TP_PCT         = 0.15
 SL_PCT         = 0.07
 TP_REBOTE      = 0.05
 SL_REBOTE      = 0.03
-TP_BREAKOUT    = 0.05
-SL_BREAKOUT    = 0.025
 MAX_POSICIONES = 3
 CB_LIMITE      = 5
 BASE_URL       = "https://fapi.binance.com"
 
-# Stop loss global diario: si el capital cae mas de 10% en el dia -> pausar
-SL_DIARIO_PCT  = 0.15  # 15% diario — proteccion real de capital
+# Stop loss global diario: si el capital cae mas de 15% en el dia -> pausar
+SL_DIARIO_PCT  = 0.15
 
 # Ciclo aleatorio entre 5 y 15 minutos
 CICLO_MIN_SEG  = 5 * 60
@@ -92,14 +90,14 @@ estado = {
     "ops_ganadas":       0,
     "capital":           CAPITAL_TOTAL,
     "capital_inicial":   CAPITAL_TOTAL,
-    "capital_inicio_dia": CAPITAL_TOTAL,  # Para SL diario
+    "capital_inicio_dia": CAPITAL_TOTAL,
     "apalancamiento":    APALANCAMIENTO,
     "pares_activos":     list(PARES),
     "ultimo_trump_id":   None,
     "ultimo_trump_texto": "",
     "trump_alerta_activa": False,
     "trump_direccion":   "",
-    "tendencia_btc":     "lateral",  # Para filtro tendencia mayor
+    "tendencia_btc":     "lateral",
     "ciclo":             0,
     "sl_diario_activo":  False,
 }
@@ -108,24 +106,19 @@ lock = threading.Lock()
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
 def hora_chile() -> int:
-    """Retorna hora actual en UTC-4 (Venezuela, sin cambio de horario)"""
     from datetime import timezone, timedelta
     tz_fija = timezone(timedelta(hours=-4))
     return datetime.now(tz_fija).hour
 
 def en_horario_operacion() -> bool:
-    """Retorna True si es horario valido para operar (6am a 2am Chile)"""
     h = hora_chile()
-    # Operar de 6am a 2am = NO operar de 2am a 6am
     if 2 <= h < 6:
         return False
     return True
 
 def reset_sl_diario():
-    """Resetea el capital de inicio del dia cada medianoche"""
     while True:
         ahora = datetime.now()
-        # Esperar hasta medianoche
         segundos = (24 - ahora.hour) * 3600 - ahora.minute * 60 - ahora.second
         time.sleep(segundos)
         with lock:
@@ -134,7 +127,6 @@ def reset_sl_diario():
         log.info(f"SL diario reseteado — Capital inicio dia: ${estado['capital']:.2f}")
 
 def verificar_sl_diario():
-    """Pausa el bot si el capital cayo mas de 10% en el dia"""
     with lock:
         cap_ini_dia = estado["capital_inicio_dia"]
         cap_actual  = estado["capital"]
@@ -158,7 +150,6 @@ def verificar_sl_diario():
 # ─── FEAR & GREED + FUNDING RATE ─────────────────────────────────────────────
 
 def obtener_fear_greed() -> str:
-    """Obtiene el Fear & Greed Index de crypto (0=miedo extremo, 100=codicia extrema)."""
     try:
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
         val  = int(r["data"][0]["value"])
@@ -168,11 +159,9 @@ def obtener_fear_greed() -> str:
         return ""
 
 def obtener_multiplicador(simbolo: str) -> float:
-    """Binance USDT-M: multiplicador siempre 1 (qty en asset base)."""
     return 1.0
 
 def obtener_funding_rate(simbolo: str) -> str:
-    """Obtiene el funding rate actual del par en Binance Futures."""
     try:
         r = requests.get(f"{BASE_URL}/fapi/v1/premiumIndex",
                          params={"symbol": simbolo}, timeout=5)
@@ -187,7 +176,6 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
-    """Actualiza la tendencia de BTC cada 30 min para filtrar operaciones"""
     while True:
         try:
             df = velas("BTCUSDT", "240", 50)
@@ -196,11 +184,9 @@ def actualizar_tendencia_btc():
                 df_d = velas("BTCUSDT", "1440", 10)
                 if not df_d.empty and len(df_d) >= 7:
                     cambio_7d = (df_d["close"].iloc[-1] - df_d["close"].iloc[-7]) / df_d["close"].iloc[-7]
-                    # Crash >8% en 7 dias: solo SHORT
                     if cambio_7d < -0.08 and t != "bajista":
                         t = "bajista"
                         log.info(f"BTC crash ({cambio_7d*100:.1f}% en 7d) — solo SHORT")
-                    # Rally >8% en 7 dias: solo LONG
                     elif cambio_7d > 0.08 and t != "alcista":
                         t = "alcista"
                         log.info(f"BTC rally ({cambio_7d*100:.1f}% en 7d) — solo LONG")
@@ -213,15 +199,11 @@ def actualizar_tendencia_btc():
         time.sleep(30 * 60)
 
 def filtro_tendencia_btc(dir_operacion: str) -> bool:
-    """
-    Retorna True si la operacion va en la misma direccion que BTC.
-    Si BTC esta lateral, permite ambas direcciones.
-    """
     with lock:
         t_btc = estado["tendencia_btc"]
 
     if t_btc == "lateral":
-        return True  # Mercado lateral: permite ambas direcciones
+        return True
     if t_btc == "alcista" and dir_operacion == "alcista":
         return True
     if t_btc == "bajista" and dir_operacion == "bajista":
@@ -456,7 +438,7 @@ def monitor_fed():
             texto = p["texto"]
             log.info(f"Fed NOTICIA: {texto[:100]}")
             if any(kw in texto.lower() for kw in FED_KEYWORDS):
-                tg(f"🏦 <b>RESERVA FEDERAL</b>\n\n{texto}\n\n<i>Fuente: Google News</i>")
+                tg(f"<b>RESERVA FEDERAL</b>\n\n{texto}\n\n<i>Fuente: Google News</i>")
             time.sleep(15 * 60)
         except Exception as e:
             log.error(f"Monitor Fed: {e}")
@@ -502,19 +484,13 @@ def monitor_trump():
                 estado["trump_direccion"]     = analisis["impacto"]
                 estado["trump_alerta_activa"] = analisis["urgencia"] == "ALTA" and analisis["confianza"] >= 60
 
-            emoji = "📈" if analisis["impacto"] == "ALCISTA" else "📉" if analisis["impacto"] == "BAJISTA" else "⚡"
-            urgencia_emoji = "🚨" if analisis["urgencia"] == "ALTA" else "⚠️" if analisis["urgencia"] == "MEDIA" else "ℹ️"
-
-            msg = (
-                f"{urgencia_emoji} TRUMP EN TRUTH SOCIAL\n\n"
-                f'"{texto[:300]}"\n\n'
-                f"{emoji} Impacto crypto: {analisis['impacto']}\n"
-                f"Confianza IA: {analisis['confianza']}%\n"
-                f"Urgencia: {analisis['urgencia']}\n"
-                f"Razon: {analisis['razon']}\n\n"
-                f"{'🎯 Bot ajustando estrategia...' if estado['trump_alerta_activa'] else 'Bot continua estrategia normal'}"
-            )
-            tg(msg)
+            tg(f"TRUMP EN TRUTH SOCIAL\n\n"
+               f'"{texto[:300]}"\n\n'
+               f"Impacto crypto: {analisis['impacto']}\n"
+               f"Confianza IA: {analisis['confianza']}%\n"
+               f"Urgencia: {analisis['urgencia']}\n"
+               f"Razon: {analisis['razon']}\n\n"
+               f"{'Bot ajustando estrategia...' if estado['trump_alerta_activa'] else 'Bot continua estrategia normal'}")
             log.info(f"Trump analizado: {analisis['impacto']} {analisis['confianza']}% | {analisis['razon']}")
 
         except Exception as e:
@@ -545,7 +521,7 @@ def monitor_sec():
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in SEC_KEYWORDS):
                         ultimo_id = guid
                         log.info(f"SEC NOTICIA: {titulo[:100]}")
-                        tg(f"⚖️ <b>SEC / REGULACION</b>\n\n{titulo}\n\n<i>Puede mover el mercado — revisar posiciones</i>")
+                        tg(f"<b>SEC / REGULACION</b>\n\n{titulo}\n\n<i>Puede mover el mercado — revisar posiciones</i>")
                         break
         except Exception as e:
             log.error(f"Monitor SEC: {e}")
@@ -570,7 +546,7 @@ def monitor_cpi():
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in kws):
                         ultimo_id = guid
                         log.info(f"CPI NOTICIA: {titulo[:100]}")
-                        tg(f"📊 <b>CPI / INFLACION</b>\n\n{titulo}\n\n<i>Dato macro — BTC suele moverse 3-8% en proximas horas</i>")
+                        tg(f"<b>CPI / INFLACION</b>\n\n{titulo}\n\n<i>Dato macro — BTC suele moverse 3-8% en proximas horas</i>")
                         break
         except Exception as e:
             log.error(f"Monitor CPI: {e}")
@@ -583,7 +559,6 @@ def monitor_liquidaciones():
     ultimo_alerta = 0
     while True:
         try:
-            # CoinGlass API publica — liquidaciones totales 1h
             r = requests.get(
                 "https://open-api.coinglass.com/public/v2/liquidation_history",
                 params={"symbol": "BTC", "interval": "1h"},
@@ -601,12 +576,12 @@ def monitor_liquidaciones():
                         ultimo_alerta = ahora
                         dir_ = "BAJISTA" if longs > shorts else "ALCISTA"
                         log.info(f"LIQUIDACION MASIVA: ${total/1e6:.0f}M — {dir_}")
-                        tg(f"💥 <b>LIQUIDACION MASIVA</b>\n\n"
+                        tg(f"<b>LIQUIDACION MASIVA</b>\n\n"
                            f"Total: ${total/1e6:.0f}M USD en 1h\n"
                            f"Longs liquidados: ${longs/1e6:.0f}M\n"
                            f"Shorts liquidados: ${shorts/1e6:.0f}M\n"
                            f"Señal: {dir_}\n\n"
-                           f"<i>Posible reversión inminente</i>")
+                           f"<i>Posible reversion inminente</i>")
         except Exception as e:
             log.error(f"Monitor liquidaciones: {e}")
         time.sleep(15 * 60)
@@ -630,7 +605,7 @@ def monitor_ballenas():
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in kws):
                         ultimo_id = guid
                         log.info(f"BALLENA: {titulo[:100]}")
-                        tg(f"🐋 <b>MOVIMIENTO BALLENA</b>\n\n{titulo}\n\n<i>Monitorear precio en proximos 30 min</i>")
+                        tg(f"<b>MOVIMIENTO BALLENA</b>\n\n{titulo}\n\n<i>Monitorear precio en proximos 30 min</i>")
                         break
         except Exception as e:
             log.error(f"Monitor ballenas: {e}")
@@ -720,7 +695,6 @@ def bn_post(endpoint: str, params: dict) -> dict:
             return {}
     return {}
 
-# Convierte intervalo en minutos a formato Binance
 def _bn_interval(granularity: str) -> str:
     m = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
          "60": "1h", "120": "2h", "240": "4h", "480": "8h",
@@ -755,7 +729,6 @@ def precio(simbolo: str) -> float:
         return 0.0
 
 def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> float:
-    """Calcula cantidad en asset base para Binance Futures."""
     with lock:
         cap = estado["capital"]
         lev = estado["apalancamiento"]
@@ -769,7 +742,6 @@ def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> flo
     return cant
 
 def _bn_set_leverage(simbolo: str, lev: int):
-    """Configura apalancamiento en Binance Futures."""
     try:
         bn_post("/fapi/v1/leverage", {"symbol": simbolo, "leverage": lev})
     except Exception as e:
@@ -780,10 +752,8 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
     if cant_tp is None:
         cant_tp = cantidad
 
-    # Configura apalancamiento
     _bn_set_leverage(simbolo, lev)
 
-    # Orden de entrada (SELL para SHORT)
     bn_side = "SELL" if lado == "sell" else "BUY"
     r = bn_post("/fapi/v1/order", {
         "symbol":   simbolo,
@@ -794,12 +764,10 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
     if not r or r.get("error") in ("insufficient_funds", "margin_mode"):
         return False
 
-    # Lado de cierre
     close_s = "BUY" if bn_side == "SELL" else "SELL"
     sl_oid  = f"sl_{int(time.time()*1000)}"
     tp_oid  = f"tp_{int(time.time()*1000)+1}"
 
-    # Stop Loss
     bn_post("/fapi/v1/order", {
         "symbol":           simbolo,
         "side":             close_s,
@@ -809,7 +777,6 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
         "newClientOrderId": sl_oid,
     })
 
-    # Take Profit
     bn_post("/fapi/v1/order", {
         "symbol":           simbolo,
         "side":             close_s,
@@ -821,7 +788,6 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
     return sl_oid, tp_oid
 
 def balance_binance() -> float:
-    """Retorna el equity total en USDT de Binance Futures."""
     try:
         d = bn_get("/fapi/v2/balance")
         for item in (d.get("data") or []):
@@ -845,7 +811,6 @@ def recalcular_capital():
         estado["apalancamiento"] = 10
         log.warning("Apalancamiento reducido a x10 por caida de capital")
 
-    # Verificar SL diario
     verificar_sl_diario()
 
 # ─── HISTORIAL ────────────────────────────────────────────────────────────────
@@ -873,9 +838,7 @@ def guardar_historial(simbolo, dir_, entrada, salida, pnl, resultado, confianza_
     except Exception as e:
         log.error(f"Historial: {e}")
 
-
 def guardar_memoria_trade(p: dict, pc: float, resultado: str, pnl: float):
-    """Guarda en memoria el contexto completo del trade para que la IA aprenda."""
     try:
         path = "memoria_trades.json"
         memoria = []
@@ -897,16 +860,13 @@ def guardar_memoria_trade(p: dict, pc: float, resultado: str, pnl: float):
             "pnl_usdt":      round(pnl, 2),
             "leccion":       f"{'GANO' if pnl > 0 else 'PERDIO'} {abs(pnl):.2f} USDT en {resultado}",
         })
-        # Guardar solo los ultimos 200 trades
         memoria = memoria[-200:]
         with open(path, "w") as f:
             json.dump(memoria, f, indent=2)
     except Exception as e:
         log.error(f"Memoria trades: {e}")
 
-
 def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
-    """Lee los ultimos N trades del simbolo para dar contexto a la IA."""
     try:
         path = "memoria_trades.json"
         if not os.path.exists(path):
@@ -942,41 +902,7 @@ def tendencia(df: pd.DataFrame) -> str:
     if c[-1] < ma20 * 0.998: return "bajista"
     return "lateral"
 
-def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
-    """Calcula el ADX (Average Directional Index). >25 = tendencia fuerte."""
-    if len(df) < periodo * 2: return 0.0
-    h = df["high"].values
-    l = df["low"].values
-    c = df["close"].values
-    tr_list, pdm_list, ndm_list = [], [], []
-    for i in range(1, len(c)):
-        tr  = max(h[i] - l[i], abs(h[i] - c[i-1]), abs(l[i] - c[i-1]))
-        pdm = max(h[i] - h[i-1], 0) if (h[i] - h[i-1]) > (l[i-1] - l[i]) else 0
-        ndm = max(l[i-1] - l[i], 0) if (l[i-1] - l[i]) > (h[i] - h[i-1]) else 0
-        tr_list.append(tr); pdm_list.append(pdm); ndm_list.append(ndm)
-    def wilder(arr, n):
-        s = sum(arr[:n])
-        result = [s]
-        for v in arr[n:]:
-            s = s - s/n + v
-            result.append(s)
-        return result
-    atr  = wilder(tr_list, periodo)
-    apdi = wilder(pdm_list, periodo)
-    andi = wilder(ndm_list, periodo)
-    dx_list = []
-    for i in range(len(atr)):
-        pdi = 100 * apdi[i] / atr[i] if atr[i] > 0 else 0
-        ndi = 100 * andi[i] / atr[i] if atr[i] > 0 else 0
-        dx  = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) > 0 else 0
-        dx_list.append(dx)
-    if len(dx_list) < periodo: return 0.0
-    adx = sum(dx_list[-periodo:]) / periodo
-    return round(adx, 2)
-
-
 def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
-    # BOS: 2 velas consecutivas de 15min en la misma direccion
     try:
         if simbolo:
             df15 = velas(simbolo, "15", 10)
@@ -989,7 +915,6 @@ def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
                     return True
     except Exception:
         pass
-    # Fallback sin requisito de volumen
     if len(df4h) < 20: return False
     u  = df4h.tail(20)
     pc = u["close"].iloc[-1]
@@ -1010,33 +935,14 @@ def buscar_ob(df: pd.DataFrame, t: str) -> dict:
 
 def en_ob(pc: float, ob: dict, t: str = "") -> bool:
     if not ob["valido"]: return False
-    # SHORT: acepta precio hasta 5% por debajo del OB (ya lo rompió)
     if t == "bajista":
         return pc <= ob["zona_alta"] and pc >= ob["zona_baja"] * 0.95
-    # LONG: acepta precio hasta 5% por encima del OB (ya lo rompió al alza)
     if t == "alcista":
         return pc >= ob["zona_baja"] and pc <= ob["zona_alta"] * 1.05
-    # Fallback generico
     m = (ob["zona_alta"] - ob["zona_baja"]) * 0.5
     return (ob["zona_baja"] - m) <= pc <= (ob["zona_alta"] + m)
 
-def contar_toques(df: pd.DataFrame, ob: dict, t: str) -> int:
-    if not ob["valido"]: return 0
-    toques = 0
-    zb, za = ob["zona_baja"] * 0.985, ob["zona_alta"] * 1.015
-    u = df.tail(40).reset_index(drop=True)
-    i = 0
-    while i < len(u) - 1:
-        v, s = u.iloc[i], u.iloc[i+1]
-        if t == "alcista" and zb <= v["low"] <= za and s["close"] > s["open"]:
-            toques += 1; i += 2; continue
-        if t == "bajista" and zb <= v["high"] <= za and s["close"] < s["open"]:
-            toques += 1; i += 2; continue
-        i += 1
-    return toques
-
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
-    """ATR (Average True Range) — mide la volatilidad real del mercado."""
     if len(df) < periodo + 1: return 0.0
     h = df["high"].values
     l = df["low"].values
@@ -1045,7 +951,6 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     return sum(trs[-periodo:]) / periodo
 
 def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> float:
-    """RSI — detecta sobrecompra/sobreventa."""
     if len(df) < periodo + 1: return 50.0
     c = df["close"].values
     deltas = [c[i] - c[i-1] for i in range(1, len(c))]
@@ -1057,40 +962,7 @@ def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> float:
     rs = ag / ap
     return round(100 - (100 / (1 + rs)), 2)
 
-def hay_divergencia_rsi(df: pd.DataFrame, t: str) -> bool:
-    """Detecta divergencia RSI: precio hace nuevo extremo pero RSI no lo confirma."""
-    if len(df) < 30: return False
-    mitad = len(df) // 2
-    rsi_rec = calcular_rsi(df.iloc[mitad:])
-    rsi_ant = calcular_rsi(df.iloc[:mitad])
-    pc_rec  = df["close"].values[-1]
-    pc_ant  = df["close"].values[mitad]
-    if t == "alcista":
-        # Precio sube pero RSI baja = agotamiento alcista (divergencia bajista)
-        return pc_rec > pc_ant and rsi_rec < rsi_ant - 5
-    if t == "bajista":
-        # Precio baja pero RSI sube = agotamiento bajista (divergencia alcista)
-        return pc_rec < pc_ant and rsi_rec > rsi_ant + 5
-    return False
-
-def buscar_fvg(df: pd.DataFrame, t: str) -> dict:
-    """Fair Value Gap: zona de desequilibrio entre 3 velas consecutivas."""
-    empty = {"zona_alta": 0, "zona_baja": 0, "valido": False}
-    if len(df) < 10: return empty
-    for i in range(len(df) - 3, max(len(df) - 20, 0), -1):
-        v1, v2, v3 = df.iloc[i], df.iloc[i+1], df.iloc[i+2]
-        if t == "alcista":
-            # FVG alcista: low de v3 > high de v1 (hueco entre v1 y v3)
-            if v3["low"] > v1["high"] and v2["close"] > v2["open"]:
-                return {"zona_alta": v3["low"], "zona_baja": v1["high"], "valido": True}
-        if t == "bajista":
-            # FVG bajista: high de v3 < low de v1 (hueco entre v1 y v3)
-            if v3["high"] < v1["low"] and v2["close"] < v2["open"]:
-                return {"zona_alta": v1["low"], "zona_baja": v3["high"], "valido": True}
-    return empty
-
 def sesion_activa() -> str:
-    """Retorna la sesion de mercado activa: Asia, Londres, NY, o fuera."""
     hora_utc = datetime.now(timezone.utc).hour
     if 0 <= hora_utc < 8:   return "Asia"
     if 8 <= hora_utc < 13:  return "Londres"
@@ -1098,7 +970,6 @@ def sesion_activa() -> str:
     return "fuera"
 
 def confirma_1h(df: pd.DataFrame, t: str) -> bool:
-    # Confirmacion: 2 de las ultimas 3 velas de 15min en la misma direccion
     if len(df) < 4: return False
     c, o = df["close"].values, df["open"].values
     if t == "alcista":
@@ -1133,13 +1004,13 @@ def filtro_ia(simbolo, t, pc, ob, toques) -> dict:
             r = ai.chat.completions.create(
                 model="deepseek-chat",
                 max_tokens=300,
-                messages=[{"role": "user", "content": f"""Eres el filtro de riesgo de un bot SMC. Decide si entrar o no.
+                messages=[{"role": "user", "content": f"""Eres el filtro de riesgo de un bot SMC SHORT. Decide si entrar o no.
 
 SENAL:
 Par: {simbolo} | Fecha: {datetime.now().strftime('%Y-%m-%d %A')} | Mes: {datetime.now().month}
 Tendencia Daily: {t} | Tendencia BTC: {t_btc} | Precio: ${pc:.4f}
 Order Block: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-Direccion: {'LONG' if t == 'alcista' else 'SHORT'} | Hora Chile: {hora_chile()}h
+Direccion: SHORT | Hora Chile: {hora_chile()}h
 Sesion activa: {sesion} | RSI 4H: {rsi_actual}
 {fear_greed}
 {funding}
@@ -1147,11 +1018,11 @@ Sesion activa: {sesion} | RSI 4H: {rsi_actual}
 {memoria_contexto}
 
 ANALIZA:
-1. El Fear & Greed apoya o contradice la entrada?
+1. El Fear & Greed apoya o contradice la entrada SHORT?
 2. El Funding Rate indica posicionamiento extremo que pueda revertirse?
-3. La tendencia BTC apoya la entrada?
-4. El RSI indica sobrecompra/sobreventa extrema que contradiga la entrada?
-5. La alerta Trump (si existe) apoya o contradice la entrada?
+3. La tendencia BTC apoya la entrada SHORT?
+4. El RSI indica sobrecompra extrema que confirme el SHORT?
+5. La alerta Trump (si existe) apoya o contradice el SHORT?
 6. El historial de trades previos apoya o desaconseja esta entrada?
 
 RESPONDE EXACTAMENTE (sin texto extra):
@@ -1180,32 +1051,33 @@ RAZON: una linea breve"""}]
 # ─── POSICIONES ───────────────────────────────────────────────────────────────
 
 def abrir(simbolo, t, pc, ia):
-    lev    = estado["apalancamiento"]
-    lado   = "buy" if t == "alcista" else "sell"
-    dir_   = "LONG" if lado == "buy" else "SHORT"
+    # Bot SHORT: solo opera bajista
+    if t != "bajista":
+        log.info(f"{simbolo} — abrir() llamado con tendencia {t}, ignorado (solo SHORT)")
+        return
 
-    # SL basado en ATR (volatilidad real) — 2x ATR del 4H
+    lado   = "sell"
+    dir_   = "SHORT"
+
     df_4h_sl = velas(simbolo, "240", 30)
     atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 2, pc * 0.03)  # minimo 3% si ATR es muy pequeno
+    sl_dist  = max(atr_val * 2, pc * 0.03)
     sl_pct   = sl_dist / pc
-    # TP parcial: TP1 a 1.5x ATR (asegurar ganancia), TP2 a 3x ATR (objetivo final)
-    tp1_dist = max(atr_val * 1.5, pc * 0.015)  # minimo 1.5%
-    tp2_dist = max(atr_val * 3.0, pc * 0.03)   # minimo 3%
-    sl  = round(pc - sl_dist  if lado == "buy" else pc + sl_dist,  6)
-    tp1 = round(pc + tp1_dist if lado == "buy" else pc - tp1_dist, 6)
-    tp2 = round(pc + tp2_dist if lado == "buy" else pc - tp2_dist, 6)
-    tp  = tp1  # compatibilidad con resto del codigo
+    tp1_dist = max(atr_val * 1.5, pc * 0.015)
+    tp2_dist = max(atr_val * 3.0, pc * 0.03)
+    sl  = round(pc + sl_dist, 6)   # SL por encima para SHORT
+    tp1 = round(pc - tp1_dist, 6)  # TP por debajo para SHORT
+    tp2 = round(pc - tp2_dist, 6)
+    tp  = tp1
     log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
 
-    # Capital dinamico segun confianza IA
     confianza = ia.get("confianza", 55)
     if confianza >= 70:
-        capital_pct = 1.00  # 100% — alta seguridad
+        capital_pct = 1.00
     elif confianza >= 61:
-        capital_pct = 0.65  # 65%
+        capital_pct = 0.65
     else:
-        capital_pct = 0.35  # 35% — minimo
+        capital_pct = 0.35
     riesgo_usdt = estado["capital"] * capital_pct * sl_pct
     log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% | riesgo max ${riesgo_usdt:.2f}")
     g_pot = riesgo_usdt * (TP_PCT / SL_PCT)
@@ -1214,16 +1086,18 @@ def abrir(simbolo, t, pc, ia):
     margen = round(estado["capital"] * capital_pct, 2)
     cant   = calcular_cantidad(simbolo, pc, capital_pct)
 
-    # Cantidades para TP parcial (50% cada uno, minimo 1 contrato)
-    cant_tp1 = max(1, cant // 2)
-    cant_tp2 = max(1, cant - cant_tp1)
+    precision = BN_QTY_PRECISION.get(simbolo, 3)
+    cant_tp1 = round(cant / 2, precision)
+    cant_tp2 = round(cant - cant_tp1, precision)
+    min_qty  = 10 ** (-precision)
+    cant_tp1 = max(min_qty, cant_tp1)
+    cant_tp2 = max(min_qty, cant_tp2)
 
     resultado = ejecutar_orden(simbolo, lado, cant, sl, tp1, cant_tp=cant_tp1)
     if not resultado:
         return
     sl_oid, tp1_oid = resultado
 
-    # TP2: monitoreo por software (Binance no permite 2 TAKE_PROFIT_MARKET con closePosition=true)
     tp2_oid = f"tp2_{int(time.time()*1000)}"
     log.info(f"{simbolo} — TP2 ${tp2:.4f} configurado (monitoreo por software)")
 
@@ -1252,13 +1126,13 @@ def abrir(simbolo, t, pc, ia):
         })
         estado["ops_total"] += 1
 
-    tg(f"ENTRADA {simbolo} {dir_} @ ${pc:.4f}\n"
+    tg(f"ENTRADA {simbolo} SHORT @ ${pc:.4f}\n"
        f"IA {ia['confianza']}% | Riesgo: ${p_pot:.2f} USDT\n"
        f"SL: ${sl:.4f} | TP1: ${tp1:.4f} (50%) | TP2: ${tp2:.4f} (50%)\n"
        f"Razon: {ia['razon']}")
 
 def _cerrar_posicion(p: dict, pc: float):
-    # ── TP1 parcial: cierra 50% y mueve SL a breakeven ────────────────────────
+    # TP1 parcial: cierra 50% y mueve SL a breakeven
     if not p.get("tp1_hit", True) and "tp1" in p:
         tp1_ok = (p["dir"] == "LONG" and pc >= p["tp1"]) or (p["dir"] == "SHORT" and pc <= p["tp1"])
         if tp1_ok:
@@ -1267,7 +1141,6 @@ def _cerrar_posicion(p: dict, pc: float):
             mult = obtener_multiplicador(p["simbolo"])
             pnl_parcial = round((pc - p["entrada"]) * cant_tp1 * mult, 2) if p["dir"] == "LONG" \
                           else round((p["entrada"] - pc) * cant_tp1 * mult, 2)
-            # Cancelar SL actual y colocar nuevo SL en breakeven para cant_tp2
             close_s_bn = "SELL" if p["dir"] == "LONG" else "BUY"
             if p.get("sl_oid"):
                 bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
@@ -1282,19 +1155,19 @@ def _cerrar_posicion(p: dict, pc: float):
             })
             with lock:
                 p["tp1_hit"] = True
-                p["sl"]      = p["entrada"]   # breakeven
+                p["sl"]      = p["entrada"]
                 p["sl_oid"]  = nuevo_sl_oid
-                p["tp"]      = p["tp2"]        # ahora monitorear TP2
+                p["tp"]      = p["tp2"]
                 p["cantidad"] = cant_tp2
                 estado["capital"] += pnl_parcial
             log.warning(f"{p['simbolo']} TP1 +${pnl_parcial:.2f} | SL → breakeven ${p['entrada']:.4f} | Esperando TP2 ${p['tp2']:.4f}")
-            tg(f"✅ TP1 {p['simbolo']} {p['dir']} +${pnl_parcial:.2f} USDT\nSL movido a breakeven — esperando TP2 ${p['tp2']:.4f}")
+            tg(f"TP1 {p['simbolo']} {p['dir']} +${pnl_parcial:.2f} USDT\nSL movido a breakeven — esperando TP2 ${p['tp2']:.4f}")
             return
 
     tp_ok = (p["dir"] == "LONG" and pc >= p["tp"]) or (p["dir"] == "SHORT" and pc <= p["tp"])
     sl_ok = (p["dir"] == "LONG" and pc <= p["sl"]) or (p["dir"] == "SHORT" and pc >= p["sl"])
 
-    # Trailing stop: mover SL en Binance cuando precio avanza 8% a favor
+    # Trailing stop
     if not sl_ok and not tp_ok:
         entrada  = p["entrada"]
         mover    = False
@@ -1309,10 +1182,8 @@ def _cerrar_posicion(p: dict, pc: float):
                 nuevo_sl = candidato; mover = True
         if mover:
             close_s_bn = "SELL" if p["dir"] == "LONG" else "BUY"
-            # Cancelar SL anterior en Binance
             if p.get("sl_oid"):
                 bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
-            # Colocar nuevo SL en Binance
             nuevo_oid = f"sl_{int(time.time()*1000)}"
             bn_post("/fapi/v1/order", {
                 "symbol":           p["simbolo"],
@@ -1326,14 +1197,14 @@ def _cerrar_posicion(p: dict, pc: float):
             p["sl_oid"] = nuevo_oid
             log.info(f"{p['simbolo']} — Trailing SL actualizado en Binance: ${nuevo_sl:.4f}")
 
-    # Cierre por cambio de tendencia (solo posiciones abiertas por el bot, no recuperadas)
+    # Cierre por cambio de tendencia
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
                           (p["dir"] == "LONG"  and t_btc == "bajista")
     if tendencia_invertida and p.get("tipo") != "recuperada":
         log.info(f"{p['simbolo']} — CIERRE por cambio tendencia BTC ({t_btc}) contra {p['dir']}")
         tp_ok = False
-        sl_ok = True  # se trata como SL para el calculo de PnL real
+        sl_ok = True
 
     if not (tp_ok or sl_ok):
         return
@@ -1343,14 +1214,11 @@ def _cerrar_posicion(p: dict, pc: float):
             return
         estado["posiciones"].remove(p)
 
-        # Cancelar orden TP en Binance si cerramos por SL o tendencia
         if not tp_ok and p.get("tp_oid"):
             bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["tp_oid"]})
-        # Cancelar orden SL en Binance si cerramos por TP
         if tp_ok and p.get("sl_oid"):
             bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
 
-        # PnL real siempre desde precio de cierre (robusto para todos los tipos)
         margen = p.get("margen", estado["capital"] * p.get("capital_pct", 0.5))
         if p["dir"] == "LONG":
             pnl = round((pc - p["entrada"]) / p["entrada"] * margen, 2)
@@ -1374,12 +1242,11 @@ def _cerrar_posicion(p: dict, pc: float):
 
     wr = ops_g / ops_t * 100 if ops_t else 0
     signo = "+" if pnl > 0 else ""
-    tg(f"{'✅' if tp_ok else '🔴'} {p['simbolo']} {resultado} {signo}${pnl:.2f} USDT\n"
+    tg(f"{'OK' if tp_ok else 'SL'} {p['simbolo']} {resultado} {signo}${pnl:.2f} USDT\n"
        f"Capital: ${cap:.2f} | WR: {wr:.0f}%")
 
     recalcular_capital()
 
-    # Re-entrada: si fue TP y el mercado sigue en la misma direccion, re-analiza en 5 min
     if tp_ok:
         def reentrada():
             time.sleep(5 * 60)
@@ -1387,7 +1254,6 @@ def _cerrar_posicion(p: dict, pc: float):
             analizar(p["simbolo"])
         threading.Thread(target=reentrada, daemon=True).start()
 
-    # Re-entrada: si se cerro por cambio de tendencia, re-analiza en 2 min en la nueva direccion
     if tendencia_invertida:
         sim = p["simbolo"]
         def reentrada_reversion(s=sim):
@@ -1402,7 +1268,6 @@ def _cerrar_posicion(p: dict, pc: float):
         tg(f"CIRCUIT BREAKER — {CB_LIMITE} perdidas seguidas. Envia /reactivar para continuar.")
 
 def _sincronizar_con_binance():
-    """Sincroniza posiciones con Binance: agrega las que faltan, elimina las cerradas."""
     try:
         r = bn_get("/fapi/v2/positionRisk")
         pos_data = [p for p in (r.get("data") or [])
@@ -1410,7 +1275,6 @@ def _sincronizar_con_binance():
 
         simbolos_bn = {p["symbol"] for p in pos_data}
 
-        # 1) Eliminar posiciones internas que ya no existen en Binance
         with lock:
             cerradas_ext = [p for p in estado["posiciones"] if p["simbolo"] not in simbolos_bn]
             estado["posiciones"] = [p for p in estado["posiciones"] if p["simbolo"] in simbolos_bn]
@@ -1423,7 +1287,6 @@ def _sincronizar_con_binance():
             guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl_est, resultado, p.get("confianza_ia", 0))
             log.warning(f"Monitor: {p['simbolo']} cerrada externamente — PnL est. ${pnl_est}")
 
-        # 2) Agregar posiciones de Binance que el bot no esta rastreando
         with lock:
             simbolos_bot = {p["simbolo"] for p in estado["posiciones"]}
         for pk in pos_data:
@@ -1432,7 +1295,7 @@ def _sincronizar_con_binance():
                 continue
             amt  = float(pk.get("positionAmt", 0))
             dir_ = "LONG" if amt > 0 else "SHORT"
-            # Bot SHORT: ignorar posiciones LONG
+            # Bot SHORT: ignorar posiciones LONG (abiertas por el bot LONG)
             if dir_ == "LONG":
                 log.info(f"Sync: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
                 continue
@@ -1466,7 +1329,6 @@ def monitor_posiciones():
                 if pc:
                     _cerrar_posicion(p, pc)
                 time.sleep(1)
-            # Cada 2 ciclos sincroniza con Binance (detecta cierres y posiciones perdidas)
             ciclos += 1
             if ciclos % 2 == 0:
                 _sincronizar_con_binance()
@@ -1474,10 +1336,11 @@ def monitor_posiciones():
             log.error(f"Monitor posiciones: {e}")
         time.sleep(30)
 
-# ─── REBOTE CONTRA TENDENCIA ──────────────────────────────────────────────────
+# ─── REBOTE SHORT EN TENDENCIA ALCISTA ────────────────────────────────────────
+# FIX: abrir_rebote ahora abre SHORT (no LONG) cuando hay rebote bajista en uptrend
 
 def filtro_ia_rebote(simbolo, pc, ob) -> dict:
-    """IA evalua si hay rebote alcista valido dentro de tendencia bajista."""
+    """IA evalua si hay rebote bajista valido dentro de tendencia alcista."""
     memoria_contexto = leer_memoria_trades(simbolo)
     for intento in range(3):
         try:
@@ -1488,15 +1351,15 @@ def filtro_ia_rebote(simbolo, pc, ob) -> dict:
                     f"""Eres un trader SMC experto.
 
 Par: {simbolo} | Precio actual: ${pc:.4f}
-Contexto: TENDENCIA DIARIA BAJISTA pero se detecta rebote tecnico alcista.
-Order Block alcista en: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-BOS alcista confirmado en 15min. 2+ velas alcistas de confirmacion.
-Objetivo LONG conservador: +5% | Stop loss: -3%
+Contexto: TENDENCIA DIARIA ALCISTA pero se detecta rebote tecnico bajista.
+Order Block bajista en: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
+BOS bajista confirmado en 15min. 2+ velas bajistas de confirmacion.
+Objetivo SHORT conservador: -5% | Stop loss: +3%
 
 {memoria_contexto}
 
-EVALUA si este rebote tiene probabilidad real de alcanzar +5% antes de ser absorbido por la tendencia bajista.
-Considera: soporte tecnico, fuerza del rebote, historial previo de este par.
+EVALUA si este rebote bajista tiene probabilidad real de alcanzar -5% antes de ser absorbido por la tendencia alcista.
+Considera: resistencia tecnica, fuerza del rebote bajista, historial previo de este par.
 
 RESPONDE EXACTAMENTE (sin texto extra):
 DECISION: ENTRAR o NO_ENTRAR
@@ -1520,22 +1383,22 @@ RAZON: una linea breve"""}]
 
 
 def abrir_rebote(simbolo, pc, ia):
-    """Abre un LONG de rebote con TP/SL conservadores."""
-    sl  = round(pc * (1 - SL_REBOTE), 6)
-    tp  = round(pc * (1 + TP_REBOTE), 6)
+    """Abre un SHORT de rebote bajista en tendencia alcista."""
+    sl  = round(pc * (1 + SL_REBOTE), 6)   # SL por encima para SHORT
+    tp  = round(pc * (1 - TP_REBOTE), 6)   # TP por debajo para SHORT
     capital_pct = 0.40
     with lock:
         margen = round(estado["capital"] * capital_pct, 2)
     cant = calcular_cantidad(simbolo, pc, capital_pct)
-    log.info(f"{simbolo} [REBOTE] LONG | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 40%")
-    resultado = ejecutar_orden(simbolo, "buy", cant, sl, tp)
+    log.info(f"{simbolo} [REBOTE] SHORT | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 40%")
+    resultado = ejecutar_orden(simbolo, "sell", cant, sl, tp)  # sell = SHORT
     if not resultado:
         return
     sl_oid, tp_oid = resultado
     with lock:
         estado["posiciones"].append({
             "simbolo":      simbolo,
-            "dir":          "LONG",
+            "dir":          "SHORT",   # FIX: era "LONG"
             "entrada":      pc,
             "sl":           sl,
             "tp":           tp,
@@ -1550,140 +1413,16 @@ def abrir_rebote(simbolo, pc, ia):
             "ts":           datetime.now().isoformat(),
         })
         estado["ops_total"] += 1
-    log.info(f"{simbolo} [REBOTE] posicion abierta | ops_total={estado['ops_total']}")
-
-
-# ─── BREAKOUT ─────────────────────────────────────────────────────────────────
-
-def detectar_breakout(simbolo: str, pc: float) -> dict:
-    """
-    Detecta rotura alcista con volumen.
-    Condiciones:
-    - Precio rompe el maximo de las ultimas 10 velas de 15min
-    - Vela de rotura con volumen >= 2x el promedio de las 10 anteriores
-    - MA7 > MA25 en 1H (momentum alcista a corto plazo)
-    Retorna dict con 'valido', 'nivel_rotura', 'vol_ratio', 'ma_ok'
-    """
-    resultado = {"valido": False, "nivel_rotura": 0, "vol_ratio": 0, "ma_ok": False}
-    try:
-        # Velas 15min para detectar rotura de maximo y volumen
-        df15 = velas(simbolo, "15", 20)
-        if df15.empty or len(df15) < 12:
-            return resultado
-        # Maximo de las 10 velas anteriores (excluye la ultima)
-        ventana = df15.iloc[-11:-1]
-        max_previo = ventana["high"].max()
-        ultima = df15.iloc[-1]
-        vol_promedio = ventana["volume"].mean()
-        vol_ultima   = ultima["volume"]
-        vol_ratio    = vol_ultima / vol_promedio if vol_promedio > 0 else 0
-        rotura = ultima["close"] > max_previo and vol_ratio >= 2.0
-
-        # MA7 > MA25 en velas 1H
-        df1h = velas(simbolo, "60", 30)
-        ma_ok = False
-        if not df1h.empty and len(df1h) >= 25:
-            ma7  = df1h["close"].values[-7:].mean()
-            ma25 = df1h["close"].values[-25:].mean()
-            ma_ok = ma7 > ma25
-
-        resultado = {
-            "valido":        rotura and ma_ok,
-            "nivel_rotura":  max_previo,
-            "vol_ratio":     round(vol_ratio, 1),
-            "ma_ok":         ma_ok,
-        }
-    except Exception as e:
-        log.error(f"detectar_breakout {simbolo}: {e}")
-    return resultado
-
-
-def filtro_ia_breakout(simbolo, pc, bk) -> dict:
-    """IA evalua si el breakout tiene continuacion."""
-    memoria_contexto = leer_memoria_trades(simbolo)
-    for intento in range(3):
-        try:
-            r = ai.chat.completions.create(
-                model="deepseek-chat",
-                max_tokens=150,
-                messages=[{"role": "user", "content":
-                    f"""Eres un trader experto en breakouts con volumen.
-
-Par: {simbolo} | Precio actual: ${pc:.4f}
-Nivel de rotura: ${bk['nivel_rotura']:.4f}
-Volumen de rotura: {bk['vol_ratio']}x el promedio (minimo esperado: 2x)
-MA7 > MA25 en 1H: {'SI' if bk['ma_ok'] else 'NO'}
-Objetivo LONG: +5% | Stop loss: -2.5%
-
-{memoria_contexto}
-
-EVALUA si este breakout tiene momentum suficiente para continuar +5% sin pullback profundo.
-Considera: fuerza del volumen, contexto macro, historial previo de este par, probabilidad de fakeout.
-
-RESPONDE EXACTAMENTE (sin texto extra):
-DECISION: ENTRAR o NO_ENTRAR
-CONFIANZA: 0-100
-RAZON: una linea breve"""}]
-            )
-            texto = r.choices[0].message.content.strip()
-            dec, conf, razon = "NO_ENTRAR", 0, "Sin respuesta"
-            for l in texto.split("\n"):
-                if "DECISION:" in l: dec = "ENTRAR" if "ENTRAR" in l else "NO_ENTRAR"
-                elif "CONFIANZA:" in l:
-                    try: conf = int(l.split(":")[1].strip())
-                    except: pass
-                elif "RAZON:" in l: razon = l.split(":", 1)[1].strip()
-            return {"entrar": dec == "ENTRAR" and conf >= 60, "confianza": conf, "razon": razon}
-        except Exception as e:
-            log.error(f"IA breakout intento {intento+1}: {e}")
-            if intento < 2:
-                time.sleep(5)
-    return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
-
-
-def abrir_breakout(simbolo, pc, ia):
-    """Abre un LONG de breakout con TP/SL conservadores."""
-    sl  = round(pc * (1 - SL_BREAKOUT), 6)
-    tp  = round(pc * (1 + TP_BREAKOUT), 6)
-    capital_pct = 0.35
-    with lock:
-        margen = round(estado["capital"] * capital_pct, 2)
-    cant = calcular_cantidad(simbolo, pc, capital_pct)
-    log.info(f"{simbolo} [BREAKOUT] LONG | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 35%")
-    resultado = ejecutar_orden(simbolo, "buy", cant, sl, tp)
-    if not resultado:
-        return
-    sl_oid, tp_oid = resultado
-    with lock:
-        estado["posiciones"].append({
-            "simbolo":      simbolo,
-            "dir":          "LONG",
-            "entrada":      pc,
-            "sl":           sl,
-            "tp":           tp,
-            "sl_oid":       sl_oid,
-            "tp_oid":       tp_oid,
-            "cantidad":     cant,
-            "margen":       margen,
-            "g_pot":        round(margen * TP_BREAKOUT, 2),
-            "p_pot":        round(margen * SL_BREAKOUT, 2),
-            "confianza_ia": ia.get("confianza", 0),
-            "tipo":         "breakout",
-            "ts":           datetime.now().isoformat(),
-        })
-        estado["ops_total"] += 1
-    log.info(f"{simbolo} [BREAKOUT] posicion abierta | ops_total={estado['ops_total']}")
-
+    log.info(f"{simbolo} [REBOTE SHORT] posicion abierta | ops_total={estado['ops_total']}")
 
 # ─── ANALISIS PAR ─────────────────────────────────────────────────────────────
 
 def _trade_ema_rsi(simbolo, t, pc, df_4h):
-    """Nueva estrategia: EMA21 + EMA89 + RSI14 en 4H (mas simple y medible)."""
+    """Estrategia principal: EMA21 + EMA89 + RSI14 en 4H — solo SHORT."""
     if len(df_4h) < 90:
         log.info(f"{simbolo} — sin suficientes velas 4H para EMA89")
         return
 
-    # Calcular EMA21 y EMA89
     ema21 = df_4h["close"].ewm(span=21, adjust=False).mean()
     ema89 = df_4h["close"].ewm(span=89, adjust=False).mean()
     rsi   = calcular_rsi(df_4h)
@@ -1693,27 +1432,26 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
 
+    # Bot SHORT: solo opera bajista
+    if t == "alcista":
+        log.info(f"{simbolo} — IGNORADO: bot SHORT no opera alcista en flujo principal")
+        return
+
     # Filtro tendencia BTC alineada
     if not filtro_tendencia_btc(t):
         log.info(f"{simbolo} — RECHAZADO: filtro BTC (par={t}, BTC={estado['tendencia_btc']})")
         return
 
-    # BOT SHORT: solo opera bajista, ignora alcista
-    if t == "alcista":
-        log.info(f"{simbolo} — IGNORADO: bot SHORT no opera alcista")
-        return
-
     # SHORT: EMA21 < EMA89 + RSI entre 30-55 + precio bajo EMA21
-    if t == "bajista":
-        if ema21_v >= ema89_v:
-            log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
-            return
-        if rsi > 55 or rsi < 30:
-            log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
-            return
-        if pc > ema21_v:
-            log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
-            return
+    if ema21_v >= ema89_v:
+        log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
+        return
+    if rsi > 55 or rsi < 30:
+        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
+        return
+    if pc > ema21_v:
+        log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
+        return
 
     log.info(f"{simbolo} — EMA+RSI OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
@@ -1723,7 +1461,7 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO por IA ({ia['confianza']}%): {ia['razon']}")
         return
 
-    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO {'LONG' if t == 'alcista' else 'SHORT'}")
+    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO SHORT")
     abrir(simbolo, t, pc, ia)
 
 
@@ -1761,7 +1499,7 @@ def analizar(simbolo: str):
         log.info(f"{simbolo} — RECHAZADO: tendencia lateral")
         return
 
-    # --- Flujo principal: trade EMA21 + EMA89 + RSI14 ---
+    # --- Flujo principal: SHORT EMA21 + EMA89 + RSI14 (solo bajista) ---
     _trade_ema_rsi(simbolo, t, pc, df_4h)
 
     with lock:
@@ -1769,29 +1507,17 @@ def analizar(simbolo: str):
     if tiene_pos:
         return
 
-    # --- Flujo secundario: rebote contra tendencia ---
-    _check_rebote(simbolo, t, df_4h, df_1h, pc)
+    # --- Flujo secundario: rebote SHORT en tendencia alcista ---
+    # FIX: solo se activa cuando t=="alcista" para buscar un SHORT de rebote bajista
+    if t == "alcista":
+        _check_rebote_short(simbolo, df_4h, df_1h, pc)
 
-    with lock:
-        tiene_pos = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-    if tiene_pos:
-        return
-
-    # --- Flujo terciario: breakout con volumen ---
-    bk = detectar_breakout(simbolo, pc)
-    if bk["valido"]:
-        log.info(f"{simbolo} — BREAKOUT detectado | rotura ${bk['nivel_rotura']:.4f} | vol {bk['vol_ratio']}x | MA OK")
-        ia = filtro_ia_breakout(simbolo, pc, bk)
-        if ia["entrar"]:
-            log.info(f"{simbolo} — IA APRUEBA BREAKOUT {ia['confianza']}% — EJECUTANDO LONG")
-            abrir_breakout(simbolo, pc, ia)
-        else:
-            log.info(f"{simbolo} — BREAKOUT rechazado por IA ({ia['confianza']}%): {ia['razon']}")
+    # Nota: no hay flujo de breakout (es LONG, no aplica para bot SHORT)
 
 
-def _check_rebote(simbolo: str, t: str, df_4h, df_1h, pc: float):
-    """Busca rebote alcista en tendencia bajista (o bajista en alcista)."""
-    dir_rebote = "alcista" if t == "bajista" else "bajista"
+def _check_rebote_short(simbolo: str, df_4h, df_1h, pc: float):
+    """Busca rebote bajista (SHORT) en tendencia alcista."""
+    dir_rebote = "bajista"
     if not hay_bos(df_4h, dir_rebote, simbolo):
         return
     ob_r = buscar_ob(df_4h, dir_rebote)
@@ -1801,14 +1527,13 @@ def _check_rebote(simbolo: str, t: str, df_4h, df_1h, pc: float):
         return
     if not confirma_1h(df_1h, dir_rebote):
         return
-    log.info(f"{simbolo} — REBOTE {dir_rebote.upper()} detectado en tendencia {t} — consultando IA...")
+    log.info(f"{simbolo} — REBOTE BAJISTA detectado en tendencia alcista — consultando IA...")
     ia = filtro_ia_rebote(simbolo, pc, ob_r)
     if not ia["entrar"]:
-        log.info(f"{simbolo} — REBOTE rechazado por IA ({ia['confianza']}%): {ia['razon']}")
+        log.info(f"{simbolo} — REBOTE SHORT rechazado por IA ({ia['confianza']}%): {ia['razon']}")
         return
-    log.info(f"{simbolo} — IA APRUEBA REBOTE {ia['confianza']}% — EJECUTANDO LONG")
+    log.info(f"{simbolo} — IA APRUEBA REBOTE SHORT {ia['confianza']}% — EJECUTANDO SHORT")
     abrir_rebote(simbolo, pc, ia)
-
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
@@ -1835,7 +1560,6 @@ def _enviar_reporte():
         f"  {p['simbolo']} {p['dir']} @ ${p['entrada']:.4f}" for p in pos
     ) or "  Ninguna"
     trump_txt = f"\nTrump: {trump_d} — {trump_t[:80]}..." if trump_t else ""
-
     horario_ok = en_horario_operacion()
 
     tg(f"REPORTE {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
@@ -1901,7 +1625,6 @@ def verificar_inicio():
             log.warning(f"  {s} no disponible — removido")
     estado["pares_activos"] = pares_ok
 
-    # Sincronizar posiciones abiertas desde Binance (por si el bot se reinicio)
     log.info("Sincronizando posiciones abiertas desde Binance...")
     try:
         r = bn_get("/fapi/v2/positionRisk")
@@ -1997,7 +1720,6 @@ def api_estado():
     g_dia   = round(cap - cap_dia, 2)
     pct_dia = round(g_dia / cap_dia * 100, 2) if cap_dia else 0
 
-    # Calcular P&L en tiempo real para cada posicion (con multiplicador real del contrato)
     pos_enriquecidas = []
     for p in pos:
         pc_actual = precio(p["simbolo"]) or p["entrada"]
@@ -2072,7 +1794,6 @@ def api_historial():
 
 @app.route("/api/test_orden")
 def api_test_orden():
-    """Prueba de conectividad Binance — verifica balance y precio."""
     try:
         b = balance_binance()
         pc_btc = precio("BTCUSDT")
@@ -2084,7 +1805,6 @@ def api_test_orden():
 
 @app.route("/api/cerrar_manual", methods=["POST"])
 def api_cerrar_manual():
-    """Cierra una posicion especifica manualmente desde el dashboard."""
     from flask import request as freq
     data    = freq.get_json(silent=True) or {}
     simbolo = data.get("simbolo")
@@ -2096,28 +1816,25 @@ def api_cerrar_manual():
         return jsonify({"ok": False, "error": "posicion no encontrada"})
     p  = pos[0]
     pc = precio(simbolo) or p["entrada"]
-    lado_cierre = "sell" if p["dir"] == "LONG" else "buy"
-    # Cancelar TP y SL pendientes en Binance
     for oid_key in ("sl_oid", "tp_oid"):
         oid = p.get(oid_key)
         if oid:
             bn_delete("/fapi/v1/order", {"symbol": simbolo, "origClientOrderId": oid})
-    # Orden de mercado para cerrar
     lado_cierre_bn = "BUY" if p["dir"] == "SHORT" else "SELL"
-    r = bn_post("/fapi/v1/order", {
+    bn_post("/fapi/v1/order", {
         "symbol":     simbolo,
         "side":       lado_cierre_bn,
         "type":       "MARKET",
         "quantity":   str(p.get("cantidad", 1)),
         "reduceOnly": "true",
     })
-    # Remover posicion del estado interno inmediatamente
     with lock:
         estado["posiciones"] = [x for x in estado["posiciones"] if x["simbolo"] != simbolo]
-    pnl_estimado = round((p["entrada"] - pc) * p.get("cantidad",1) * obtener_multiplicador(simbolo), 2) if p["dir"] == "SHORT" else round((pc - p["entrada"]) * p.get("cantidad",1) * obtener_multiplicador(simbolo), 2)
+    pnl_estimado = round((p["entrada"] - pc) / p["entrada"] * p.get("margen", 1), 2) if p["dir"] == "SHORT" \
+                   else round((pc - p["entrada"]) / p["entrada"] * p.get("margen", 1), 2)
     resultado = "ganado" if pnl_estimado > 0 else "perdido"
     guardar_historial(simbolo, p["dir"], p["entrada"], pc, pnl_estimado, resultado, p.get("confianza_ia", 0))
-    log.warning(f"{simbolo} — CIERRE MANUAL desde dashboard | pc=${pc:.4f} | PnL est. ${pnl_estimado}")
+    log.warning(f"{simbolo} — CIERRE MANUAL | pc=${pc:.4f} | PnL est. ${pnl_estimado}")
     tg(f"CIERRE MANUAL: {simbolo} {p['dir']} @ ${pc:.4f} | PnL est. ${pnl_estimado}")
     return jsonify({"ok": True, "mensaje": f"{simbolo} cerrado manualmente", "pnl": pnl_estimado})
 
@@ -2162,17 +1879,17 @@ def main():
 
     verificar_inicio()
 
-    threading.Thread(target=telegram_polling,      daemon=True, name="TelegramPoller").start()
-    threading.Thread(target=monitor_posiciones,    daemon=True, name="PosMonitor").start()
-    threading.Thread(target=iniciar_servidor,      daemon=True, name="Dashboard").start()
-    threading.Thread(target=monitor_trump,         daemon=True, name="TrumpMonitor").start()
-    threading.Thread(target=monitor_fed,           daemon=True, name="FedMonitor").start()
+    threading.Thread(target=telegram_polling,         daemon=True, name="TelegramPoller").start()
+    threading.Thread(target=monitor_posiciones,       daemon=True, name="PosMonitor").start()
+    threading.Thread(target=iniciar_servidor,         daemon=True, name="Dashboard").start()
+    threading.Thread(target=monitor_trump,            daemon=True, name="TrumpMonitor").start()
+    threading.Thread(target=monitor_fed,              daemon=True, name="FedMonitor").start()
     threading.Thread(target=actualizar_tendencia_btc, daemon=True, name="BTCTrend").start()
-    threading.Thread(target=reset_sl_diario,       daemon=True, name="SLDiario").start()
-    threading.Thread(target=monitor_sec,           daemon=True, name="SECMonitor").start()
-    threading.Thread(target=monitor_cpi,           daemon=True, name="CPIMonitor").start()
-    threading.Thread(target=monitor_liquidaciones, daemon=True, name="LiqMonitor").start()
-    threading.Thread(target=monitor_ballenas,      daemon=True, name="BallenaMonitor").start()
+    threading.Thread(target=reset_sl_diario,          daemon=True, name="SLDiario").start()
+    threading.Thread(target=monitor_sec,              daemon=True, name="SECMonitor").start()
+    threading.Thread(target=monitor_cpi,              daemon=True, name="CPIMonitor").start()
+    threading.Thread(target=monitor_liquidaciones,    daemon=True, name="LiqMonitor").start()
+    threading.Thread(target=monitor_ballenas,         daemon=True, name="BallenaMonitor").start()
     log.info("Hilos iniciados: TelegramPoller, PosMonitor, Dashboard, TrumpMonitor, FedMonitor, BTCTrend, SLDiario, SECMonitor, CPIMonitor, LiqMonitor, BallenaMonitor")
 
     ultimo_reporte = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2184,7 +1901,6 @@ def main():
 
         log.info(f"CICLO {ciclo} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Chile: {hora_chile()}h")
 
-        # Verificar balance real en Binance Futures cada 5 ciclos
         if ciclo % 5 == 1:
             bal_real = balance_binance()
             log.info(f"Balance real Binance Futures: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
@@ -2194,7 +1910,6 @@ def main():
 
         recalcular_capital()
 
-        # Verificar horario antes de analizar
         if not en_horario_operacion():
             log.info(f"Fuera de horario ({hora_chile()}h Chile) — esperando 6am, sin operar")
         else:
@@ -2210,7 +1925,6 @@ def main():
             _enviar_reporte()
             ultimo_reporte = ahora
 
-        # Ciclo aleatorio entre 5 y 15 minutos
         espera = random.randint(CICLO_MIN_SEG, CICLO_MAX_SEG)
         log.info(f"CICLO {ciclo} completado — proximo en {espera//60} min | {datetime.now().strftime('%H:%M')}")
         time.sleep(espera)
