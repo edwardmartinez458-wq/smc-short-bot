@@ -1576,8 +1576,21 @@ def _enviar_reporte():
 
 # ─── VERIFICACION INICIAL ─────────────────────────────────────────────────────
 
+def obtener_ip_publica() -> str:
+    """Obtiene la IP publica del servidor (Railway) y la envia por Telegram."""
+    try:
+        ip = requests.get("https://ifconfig.me", timeout=5).text.strip()
+        log.info(f"IP publica del servidor: {ip}")
+        tg(f"IP publica Railway: <b>{ip}</b>\nAgregala en Binance → Gestion de API → Restriccion de IP")
+        return ip
+    except Exception as e:
+        log.warning(f"No se pudo obtener IP publica: {e}")
+        return ""
+
 def verificar_inicio():
     errores = []
+
+    obtener_ip_publica()
 
     log.info("Verificando Binance API...")
     b = balance_binance()
