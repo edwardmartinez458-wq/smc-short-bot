@@ -19,32 +19,39 @@ load_dotenv()
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-KC_API_KEY     = os.getenv("KUCOIN_API_KEY")
-KC_SECRET      = os.getenv("KUCOIN_SECRET")
-KC_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE")
+BN_API_KEY        = os.getenv("BINANCE_API_KEY")
+BN_SECRET         = os.getenv("BINANCE_SECRET")
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 
-# Pares de ALTO volumen solamente (removidos ARB, OP, INJ por bajo volumen)
+# Pares Binance Futures (solo SHORT)
 PARES = [
-    "XBTUSDTM",
-    "ETHUSDTM",
-    "SOLUSDTM",
-    "XRPUSDTM",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
 ]
+
+# Precision de cantidad por par (step size de Binance)
+BN_QTY_PRECISION = {
+    "BTCUSDT": 3,
+    "ETHUSDT": 3,
+    "SOLUSDT": 1,
+    "XRPUSDT": 0,
+}
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
 APALANCAMIENTO = int(os.getenv("APALANCAMIENTO", "10"))
 TP_PCT         = 0.15
 SL_PCT         = 0.07
-TP_REBOTE      = 0.05   # Rebote contra tendencia: objetivo conservador
-SL_REBOTE      = 0.03   # Rebote contra tendencia: stop ajustado
-TP_BREAKOUT    = 0.05   # Breakout: objetivo conservador
-SL_BREAKOUT    = 0.025  # Breakout: stop muy ajustado
+TP_REBOTE      = 0.05
+SL_REBOTE      = 0.03
+TP_BREAKOUT    = 0.05
+SL_BREAKOUT    = 0.025
 MAX_POSICIONES = 3
 CB_LIMITE      = 5
-BASE_URL       = "https://api-futures.kucoin.com"
+BASE_URL       = "https://fapi.binance.com"
 
 # Stop loss global diario: si el capital cae mas de 10% en el dia -> pausar
 SL_DIARIO_PCT  = 0.15  # 15% diario — proteccion real de capital
@@ -160,14 +167,19 @@ def obtener_fear_greed() -> str:
     except Exception:
         return ""
 
+def obtener_multiplicador(simbolo: str) -> float:
+    """Binance USDT-M: multiplicador siempre 1 (qty en asset base)."""
+    return 1.0
+
 def obtener_funding_rate(simbolo: str) -> str:
-    """Obtiene el funding rate actual del par en KuCoin Futuros."""
+    """Obtiene el funding rate actual del par en Binance Futures."""
     try:
-        r = kc_get(f"/api/v1/funding-rate/{simbolo}/current")
-        if r.get("code") == "200000":
-            rate = float(r["data"]["value"]) * 100
-            sesgo = "SHORT (mercado muy largo)" if rate > 0.05 else "LONG (mercado muy corto)" if rate < -0.05 else "neutral"
-            return f"Funding Rate: {rate:.4f}% → sesgo {sesgo}"
+        r = requests.get(f"{BASE_URL}/fapi/v1/premiumIndex",
+                         params={"symbol": simbolo}, timeout=5)
+        d = r.json()
+        rate = float(d.get("lastFundingRate", 0)) * 100
+        sesgo = "SHORT (mercado muy largo)" if rate > 0.05 else "LONG (mercado muy corto)" if rate < -0.05 else "neutral"
+        return f"Funding Rate: {rate:.4f}% → sesgo {sesgo}"
     except Exception:
         pass
     return ""
@@ -178,10 +190,10 @@ def actualizar_tendencia_btc():
     """Actualiza la tendencia de BTC cada 30 min para filtrar operaciones"""
     while True:
         try:
-            df = velas("XBTUSDTM", "240", 50)
+            df = velas("BTCUSDT", "240", 50)
             if not df.empty:
                 t = tendencia(df)
-                df_d = velas("XBTUSDTM", "1440", 10)
+                df_d = velas("BTCUSDT", "1440", 10)
                 if not df_d.empty and len(df_d) >= 7:
                     cambio_7d = (df_d["close"].iloc[-1] - df_d["close"].iloc[-7]) / df_d["close"].iloc[-7]
                     # Crash >8% en 7 dias: solo SHORT
@@ -624,210 +636,200 @@ def monitor_ballenas():
             log.error(f"Monitor ballenas: {e}")
         time.sleep(25 * 60)
 
-# ─── KUCOIN FUTURES API ───────────────────────────────────────────────────────
+# ─── BINANCE FUTURES API ──────────────────────────────────────────────────────
 
-def kc_sign(timestamp: str, method: str, endpoint: str, body: str = "") -> tuple:
-    msg = timestamp + method + endpoint + body
-    sig = base64.b64encode(
-        hmac.new(KC_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
-    ).decode()
-    pp  = base64.b64encode(
-        hmac.new(KC_SECRET.encode(), KC_PASSPHRASE.encode(), hashlib.sha256).digest()
-    ).decode()
-    return sig, pp
+def bn_sign(params: dict) -> str:
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    return hmac.new(BN_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
-def kc_headers(method: str, endpoint: str, body: str = "") -> dict:
-    ts  = str(int(time.time() * 1000))
-    sig, pp = kc_sign(ts, method, endpoint, body)
-    return {
-        "KC-API-KEY":         KC_API_KEY,
-        "KC-API-SIGN":        sig,
-        "KC-API-TIMESTAMP":   ts,
-        "KC-API-PASSPHRASE":  pp,
-        "KC-API-KEY-VERSION": "2",
-        "Content-Type":       "application/json",
-    }
+def bn_headers() -> dict:
+    return {"X-MBX-APIKEY": BN_API_KEY, "Content-Type": "application/json"}
 
-def kc_get(endpoint: str, params: dict = None) -> dict:
-    qs = ""
-    if params:
-        qs = "?" + "&".join(f"{k}={v}" for k, v in params.items())
+def bn_get(endpoint: str, params: dict = None) -> dict:
+    p = params or {}
+    p["timestamp"] = int(time.time() * 1000)
+    p["signature"] = bn_sign(p)
     for intento in range(4):
         try:
-            r = requests.get(
-                f"{BASE_URL}{endpoint}{qs}",
-                headers=kc_headers("GET", endpoint + qs),
-                timeout=10
-            )
+            r = requests.get(f"{BASE_URL}{endpoint}", params=p, headers=bn_headers(), timeout=10)
             if r.status_code == 429:
-                log.warning("KuCoin rate limit — esperando 60s")
+                log.warning("Binance rate limit — esperando 60s")
                 time.sleep(60)
                 continue
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            log.error(f"KuCoin GET {endpoint}: {d.get('code')} {d.get('msg')}")
+            if isinstance(d, list) or (isinstance(d, dict) and "code" not in d):
+                return {"data": d, "code": "200000"}
+            log.error(f"Binance GET {endpoint}: {d.get('code')} {d.get('msg')}")
             return {}
         except requests.exceptions.ConnectionError:
             log.error(f"Sin conexion (intento {intento+1}) — reintentando en 30s")
             time.sleep(30)
         except Exception as e:
-            log.error(f"KuCoin GET {endpoint}: {e}")
+            log.error(f"Binance GET {endpoint}: {e}")
             return {}
     return {}
 
-def kc_delete(endpoint: str) -> dict:
+def bn_delete(endpoint: str, params: dict = None) -> dict:
+    p = params or {}
+    p["timestamp"] = int(time.time() * 1000)
+    p["signature"] = bn_sign(p)
     for intento in range(3):
         try:
-            r = requests.delete(
-                f"{BASE_URL}{endpoint}",
-                headers=kc_headers("DELETE", endpoint),
-                timeout=10
-            )
+            r = requests.delete(f"{BASE_URL}{endpoint}", params=p, headers=bn_headers(), timeout=10)
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            log.warning(f"KuCoin DELETE {endpoint}: {d.get('code')} {d.get('msg')}")
+            if isinstance(d, dict) and d.get("status") in ("CANCELED", "NEW", "FILLED"):
+                return {"code": "200000", "data": d}
+            log.warning(f"Binance DELETE {endpoint}: {d}")
             return {}
         except Exception as e:
-            log.error(f"KuCoin DELETE {endpoint}: {e}")
+            log.error(f"Binance DELETE {endpoint}: {e}")
     return {}
 
-def kc_post(endpoint: str, body: dict) -> dict:
+def bn_post(endpoint: str, params: dict) -> dict:
     for intento in range(4):
         try:
-            body_str = json.dumps(body)
+            p = dict(params)
+            p["timestamp"] = int(time.time() * 1000)
+            p["signature"] = bn_sign(p)
             r = requests.post(
                 f"{BASE_URL}{endpoint}",
-                headers=kc_headers("POST", endpoint, body_str),
-                data=body_str,
+                params=p,
+                headers={"X-MBX-APIKEY": BN_API_KEY},
                 timeout=10
             )
             if r.status_code == 429:
-                log.warning("KuCoin rate limit — esperando 60s")
+                log.warning("Binance rate limit — esperando 60s")
                 time.sleep(60)
                 continue
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            msg  = d.get("msg", "")
-            code = d.get("code", "")
-            log.error(f"KuCoin POST {endpoint}: code={code} msg={msg}")
-            if any(w in msg.lower() for w in ["insufficient", "available"]):
+            if isinstance(d, dict) and d.get("orderId"):
+                return {"code": "200000", "data": d}
+            msg  = d.get("msg", "") if isinstance(d, dict) else str(d)
+            code = d.get("code", "") if isinstance(d, dict) else ""
+            log.error(f"Binance POST {endpoint}: code={code} msg={msg}")
+            if any(w in msg.lower() for w in ["insufficient", "available", "balance"]):
                 return {"error": "insufficient_funds"}
-            if "margin mode" in msg.lower():
+            if "margin" in msg.lower():
                 return {"error": "margin_mode"}
             return {}
         except requests.exceptions.ConnectionError:
             log.error(f"Sin conexion (intento {intento+1}) — reintentando en 30s")
             time.sleep(30)
         except Exception as e:
-            log.error(f"KuCoin POST {endpoint}: {e}")
+            log.error(f"Binance POST {endpoint}: {e}")
             return {}
     return {}
 
+# Convierte intervalo en minutos a formato Binance
+def _bn_interval(granularity: str) -> str:
+    m = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
+         "60": "1h", "120": "2h", "240": "4h", "480": "8h",
+         "720": "12h", "1440": "1d"}
+    return m.get(str(granularity), "4h")
+
 def velas(simbolo: str, intervalo: str, limit: int = 200) -> pd.DataFrame:
-    d = kc_get("/api/v1/kline/query", {
-        "symbol": simbolo, "granularity": intervalo, "limit": limit
-    })
-    if not d.get("data"):
-        return pd.DataFrame()
+    interval = _bn_interval(intervalo)
     try:
-        df = pd.DataFrame(d["data"], columns=["ts","open","high","low","close","volume","turnover"])
+        r = requests.get(f"{BASE_URL}/fapi/v1/klines",
+            params={"symbol": simbolo, "interval": interval, "limit": min(limit, 1500)},
+            timeout=10)
+        data = r.json()
+        if not data or isinstance(data, dict):
+            return pd.DataFrame()
+        df = pd.DataFrame(data, columns=["ts","open","high","low","close","volume",
+                                          "close_time","qav","num_trades","tbbav","tbqav","ignore"])
         for col in ["open","high","low","close","volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-        return df.sort_values("ts").tail(limit).reset_index(drop=True)
+        return df[["ts","open","high","low","close","volume"]].tail(limit).reset_index(drop=True)
     except Exception as e:
         log.error(f"Velas {simbolo}: {e}")
         return pd.DataFrame()
 
 def precio(simbolo: str) -> float:
-    d = kc_get("/api/v1/ticker", {"symbol": simbolo})
     try:
-        return float(d["data"]["price"])
+        r = requests.get(f"{BASE_URL}/fapi/v1/ticker/price",
+                         params={"symbol": simbolo}, timeout=10)
+        return float(r.json().get("price", 0))
     except:
         return 0.0
 
-_multiplicadores = {}
-
-def obtener_multiplicador(simbolo: str) -> float:
-    if simbolo not in _multiplicadores:
-        try:
-            d = requests.get(f"{BASE_URL}/api/v1/contracts/{simbolo}", timeout=10).json()
-            _multiplicadores[simbolo] = float(d.get("data", {}).get("multiplier", 1))
-        except:
-            _multiplicadores[simbolo] = 1.0
-    return _multiplicadores[simbolo]
-
-def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> int:
-    """Calcula contratos usando el multiplicador real del contrato."""
+def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> float:
+    """Calcula cantidad en asset base para Binance Futures."""
     with lock:
         cap = estado["capital"]
         lev = estado["apalancamiento"]
-    mult   = obtener_multiplicador(simbolo)
-    margen = cap * capital_pct * 0.90  # 10% buffer para fees
-    cant   = max(1, int((margen * lev) / (pc * mult)))
-    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | mult={mult} | Contratos: {cant}")
+    margen = cap * capital_pct * 0.90
+    notional = margen * lev
+    precision = BN_QTY_PRECISION.get(simbolo, 3)
+    cant = round(notional / pc, precision)
+    min_qty = 10 ** (-precision)
+    cant = max(min_qty, cant)
+    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | qty={cant} {simbolo}")
     return cant
 
-def ejecutar_orden(simbolo: str, lado: str, cantidad: int, sl: float, tp: float, cant_tp: int = None) -> bool:
+def _bn_set_leverage(simbolo: str, lev: int):
+    """Configura apalancamiento en Binance Futures."""
+    try:
+        bn_post("/fapi/v1/leverage", {"symbol": simbolo, "leverage": lev})
+    except Exception as e:
+        log.warning(f"Set leverage {simbolo}: {e}")
+
+def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: float, cant_tp: float = None) -> bool:
     lev = estado["apalancamiento"]
     if cant_tp is None:
         cant_tp = cantidad
 
-    r = kc_post("/api/v1/orders", {
-        "clientOid": f"smc_{int(time.time()*1000)}",
-        "symbol":    simbolo,
-        "side":      lado,
-        "type":      "market",
-        "size":      cantidad,
-        "leverage":  str(lev),
+    # Configura apalancamiento
+    _bn_set_leverage(simbolo, lev)
+
+    # Orden de entrada (SELL para SHORT)
+    bn_side = "SELL" if lado == "sell" else "BUY"
+    r = bn_post("/fapi/v1/order", {
+        "symbol":   simbolo,
+        "side":     bn_side,
+        "type":     "MARKET",
+        "quantity": str(cantidad),
     })
     if not r or r.get("error") in ("insufficient_funds", "margin_mode"):
         return False
 
-    close_s  = "sell" if lado == "buy" else "buy"
-    sl_oid   = f"sl_{int(time.time()*1000)}"
-    tp_oid   = f"tp_{int(time.time()*1000)+1}"
+    # Lado de cierre
+    close_s = "BUY" if bn_side == "SELL" else "SELL"
+    sl_oid  = f"sl_{int(time.time()*1000)}"
+    tp_oid  = f"tp_{int(time.time()*1000)+1}"
 
-    kc_post("/api/v1/orders", {
-        "clientOid":     sl_oid,
-        "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "down" if lado == "buy" else "up",
-        "stopPrice":     str(sl),
-        "stopPriceType": "MP",
-        "size":          cantidad,
-        "leverage":      str(lev),
-        "reduceOnly":    True,
+    # Stop Loss
+    bn_post("/fapi/v1/order", {
+        "symbol":           simbolo,
+        "side":             close_s,
+        "type":             "STOP_MARKET",
+        "stopPrice":        str(sl),
+        "closePosition":    "true",
+        "newClientOrderId": sl_oid,
     })
 
-    kc_post("/api/v1/orders", {
-        "clientOid":     tp_oid,
-        "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "up" if lado == "buy" else "down",
-        "stopPrice":     str(tp),
-        "stopPriceType": "MP",
-        "size":          cant_tp,
-        "leverage":      str(lev),
-        "reduceOnly":    True,
+    # Take Profit
+    bn_post("/fapi/v1/order", {
+        "symbol":           simbolo,
+        "side":             close_s,
+        "type":             "TAKE_PROFIT_MARKET",
+        "stopPrice":        str(tp),
+        "closePosition":    "true",
+        "newClientOrderId": tp_oid,
     })
     return sl_oid, tp_oid
 
-def balance_kucoin() -> float:
-    """Retorna el equity total de la cuenta (disponible + margen en uso)."""
-    d = kc_get("/api/v1/account-overview", {"currency": "USDT"})
+def balance_binance() -> float:
+    """Retorna el equity total en USDT de Binance Futures."""
     try:
-        data = d["data"]
-        # accountEquity = saldo disponible + margen usado + PnL no realizado
-        equity = float(data.get("accountEquity", data.get("availableBalance", 0)))
-        return equity
-    except:
-        return 0.0
+        d = bn_get("/fapi/v2/balance")
+        for item in (d.get("data") or []):
+            if isinstance(item, dict) and item.get("asset") == "USDT":
+                return float(item.get("balance", 0))
+    except Exception as e:
+        log.error(f"Balance Binance: {e}")
+    return 0.0
 
 # ─── GESTION CAPITAL ──────────────────────────────────────────────────────────
 
@@ -1221,21 +1223,9 @@ def abrir(simbolo, t, pc, ia):
         return
     sl_oid, tp1_oid = resultado
 
-    # Colocar TP2 para la otra mitad
-    close_s = "sell" if lado == "buy" else "buy"
+    # TP2: monitoreo por software (Binance no permite 2 TAKE_PROFIT_MARKET con closePosition=true)
     tp2_oid = f"tp2_{int(time.time()*1000)}"
-    kc_post("/api/v1/orders", {
-        "clientOid":     tp2_oid,
-        "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "up" if lado == "buy" else "down",
-        "stopPrice":     str(tp2),
-        "stopPriceType": "MP",
-        "size":          cant_tp2,
-        "leverage":      str(estado["apalancamiento"]),
-        "reduceOnly":    True,
-    })
+    log.info(f"{simbolo} — TP2 ${tp2:.4f} configurado (monitoreo por software)")
 
     with lock:
         estado["posiciones"].append({
@@ -1278,20 +1268,17 @@ def _cerrar_posicion(p: dict, pc: float):
             pnl_parcial = round((pc - p["entrada"]) * cant_tp1 * mult, 2) if p["dir"] == "LONG" \
                           else round((p["entrada"] - pc) * cant_tp1 * mult, 2)
             # Cancelar SL actual y colocar nuevo SL en breakeven para cant_tp2
-            close_s = "sell" if p["dir"] == "LONG" else "buy"
+            close_s_bn = "SELL" if p["dir"] == "LONG" else "BUY"
             if p.get("sl_oid"):
-                kc_delete(f"/api/v1/orders/{p['sl_oid']}")
+                bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
             nuevo_sl_oid = f"sl_{int(time.time()*1000)}"
-            kc_post("/api/v1/orders", {
-                "clientOid":     nuevo_sl_oid,
-                "symbol":        p["simbolo"],
-                "side":          close_s,
-                "type":          "market",
-                "stop":          "down" if p["dir"] == "LONG" else "up",
-                "stopPrice":     str(p["entrada"]),
-                "stopPriceType": "MP",
-                "size":          cant_tp2,
-                "reduceOnly":    True,
+            bn_post("/fapi/v1/order", {
+                "symbol":           p["simbolo"],
+                "side":             close_s_bn,
+                "type":             "STOP_MARKET",
+                "stopPrice":        str(p["entrada"]),
+                "closePosition":    "true",
+                "newClientOrderId": nuevo_sl_oid,
             })
             with lock:
                 p["tp1_hit"] = True
@@ -1321,26 +1308,23 @@ def _cerrar_posicion(p: dict, pc: float):
             if candidato < p["sl"]:
                 nuevo_sl = candidato; mover = True
         if mover:
-            close_s = "sell" if p["dir"] == "LONG" else "buy"
-            # Cancelar SL anterior en KuCoin
+            close_s_bn = "SELL" if p["dir"] == "LONG" else "BUY"
+            # Cancelar SL anterior en Binance
             if p.get("sl_oid"):
-                kc_delete(f"/api/v1/orders/{p['sl_oid']}")
-            # Colocar nuevo SL en KuCoin
+                bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
+            # Colocar nuevo SL en Binance
             nuevo_oid = f"sl_{int(time.time()*1000)}"
-            kc_post("/api/v1/orders", {
-                "clientOid":     nuevo_oid,
-                "symbol":        p["simbolo"],
-                "side":          close_s,
-                "type":          "market",
-                "stop":          "down" if p["dir"] == "LONG" else "up",
-                "stopPrice":     str(nuevo_sl),
-                "stopPriceType": "MP",
-                "size":          p.get("cantidad", 1),
-                "reduceOnly":    True,
+            bn_post("/fapi/v1/order", {
+                "symbol":           p["simbolo"],
+                "side":             close_s_bn,
+                "type":             "STOP_MARKET",
+                "stopPrice":        str(nuevo_sl),
+                "closePosition":    "true",
+                "newClientOrderId": nuevo_oid,
             })
             p["sl"]    = nuevo_sl
             p["sl_oid"] = nuevo_oid
-            log.info(f"{p['simbolo']} — Trailing SL actualizado en KuCoin: ${nuevo_sl:.4f}")
+            log.info(f"{p['simbolo']} — Trailing SL actualizado en Binance: ${nuevo_sl:.4f}")
 
     # Cierre por cambio de tendencia (solo posiciones abiertas por el bot, no recuperadas)
     t_btc = estado.get("tendencia_btc", "lateral")
@@ -1359,12 +1343,12 @@ def _cerrar_posicion(p: dict, pc: float):
             return
         estado["posiciones"].remove(p)
 
-        # Cancelar orden TP en KuCoin si cerramos por SL o tendencia
+        # Cancelar orden TP en Binance si cerramos por SL o tendencia
         if not tp_ok and p.get("tp_oid"):
-            kc_delete(f"/api/v1/orders/{p['tp_oid']}")
-        # Cancelar orden SL en KuCoin si cerramos por TP
+            bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["tp_oid"]})
+        # Cancelar orden SL en Binance si cerramos por TP
         if tp_ok and p.get("sl_oid"):
-            kc_delete(f"/api/v1/orders/{p['sl_oid']}")
+            bn_delete("/fapi/v1/order", {"symbol": p["simbolo"], "origClientOrderId": p["sl_oid"]})
 
         # PnL real siempre desde precio de cierre (robusto para todos los tipos)
         margen = p.get("margen", estado["capital"] * p.get("capital_pct", 0.5))
@@ -1417,74 +1401,51 @@ def _cerrar_posicion(p: dict, pc: float):
             estado["circuit_breaker"] = True
         tg(f"CIRCUIT BREAKER — {CB_LIMITE} perdidas seguidas. Envia /reactivar para continuar.")
 
-def _sincronizar_con_kucoin():
-    """Sincroniza posiciones con KuCoin: agrega las que faltan, elimina las cerradas."""
+def _sincronizar_con_binance():
+    """Sincroniza posiciones con Binance: agrega las que faltan, elimina las cerradas."""
     try:
-        r = kc_get("/api/v1/positions")
-        pos_data = [p for p in (r.get("data") or []) if float(p.get("currentQty", 0)) != 0] if r.get("code") == "200000" else []
+        r = bn_get("/fapi/v2/positionRisk")
+        pos_data = [p for p in (r.get("data") or [])
+                    if abs(float(p.get("positionAmt", 0))) > 0 and p.get("symbol") in PARES]
 
-        # Fallback: consultar cada par individualmente (cubre modo aislado)
-        if not pos_data:
-            for s in list(estado.get("pares_activos", [])):
-                try:
-                    rp = kc_get("/api/v1/position", {"symbol": s})
-                    if rp.get("code") == "200000":
-                        pd_ = rp.get("data", {})
-                        if float(pd_.get("currentQty", 0)) != 0:
-                            pos_data.append(pd_)
-                except Exception:
-                    pass
+        simbolos_bn = {p["symbol"] for p in pos_data}
 
-        simbolos_kucoin = {p["symbol"] for p in pos_data}
-
-        # 1) Eliminar posiciones internas que ya no existen en KuCoin
+        # 1) Eliminar posiciones internas que ya no existen en Binance
         with lock:
-            cerradas_ext = [p for p in estado["posiciones"] if p["simbolo"] not in simbolos_kucoin]
-            estado["posiciones"] = [p for p in estado["posiciones"] if p["simbolo"] in simbolos_kucoin]
+            cerradas_ext = [p for p in estado["posiciones"] if p["simbolo"] not in simbolos_bn]
+            estado["posiciones"] = [p for p in estado["posiciones"] if p["simbolo"] in simbolos_bn]
         for p in cerradas_ext:
             pc = precio(p["simbolo"]) or p["entrada"]
-            pnl_est = round((p["entrada"] - pc) * p.get("cantidad",1) * obtener_multiplicador(p["simbolo"]), 2) if p["dir"] == "SHORT" \
-                      else round((pc - p["entrada"]) * p.get("cantidad",1) * obtener_multiplicador(p["simbolo"]), 2)
+            margen = p.get("margen", 1) or 1
+            pnl_est = round((p["entrada"] - pc) / p["entrada"] * margen, 2) if p["dir"] == "SHORT" \
+                      else round((pc - p["entrada"]) / p["entrada"] * margen, 2)
             resultado = "ganado" if pnl_est > 0 else "perdido"
             guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl_est, resultado, p.get("confianza_ia", 0))
             log.warning(f"Monitor: {p['simbolo']} cerrada externamente — PnL est. ${pnl_est}")
 
-        # 2) Agregar posiciones de KuCoin que el bot no esta rastreando
+        # 2) Agregar posiciones de Binance que el bot no esta rastreando
         with lock:
             simbolos_bot = {p["simbolo"] for p in estado["posiciones"]}
         for pk in pos_data:
             simbolo = pk.get("symbol", "")
             if simbolo in simbolos_bot:
                 continue
-            qty     = float(pk.get("currentQty", 0))
-            dir_    = "LONG" if qty > 0 else "SHORT"
-            # Bot SHORT: ignorar posiciones LONG (abiertas por el bot principal)
+            amt  = float(pk.get("positionAmt", 0))
+            dir_ = "LONG" if amt > 0 else "SHORT"
+            # Bot SHORT: ignorar posiciones LONG
             if dir_ == "LONG":
                 log.info(f"Sync: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
                 continue
-            entrada = float(pk.get("avgEntryPrice", 0))
-            margen  = abs(float(pk.get("posMargin", 0)))
-            # Leer SL/TP reales desde las ordenes activas en KuCoin
-            sl = round(entrada * (1 - SL_PCT) if dir_ == "LONG" else entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 + TP_PCT) if dir_ == "LONG" else entrada * (1 - TP_PCT), 6)
-            sl_oid, tp_oid = None, None
-            try:
-                ords = kc_get("/api/v1/stopOrders", {"symbol": simbolo, "status": "active"})
-                for o in (ords.get("data", {}).get("items") or []):
-                    sp = float(o.get("stopPrice", 0))
-                    oid = o.get("clientOid", o.get("id", ""))
-                    stop = o.get("stop", "")
-                    if "sl_" in oid or (stop == "down" and dir_ == "LONG") or (stop == "up" and dir_ == "SHORT"):
-                        sl = sp; sl_oid = oid
-                    elif "tp_" in oid or (stop == "up" and dir_ == "LONG") or (stop == "down" and dir_ == "SHORT"):
-                        tp = sp; tp_oid = oid
-            except Exception:
-                pass
+            entrada = float(pk.get("entryPrice", 0))
+            sl = round(entrada * (1 + SL_PCT), 6)
+            tp = round(entrada * (1 - TP_PCT), 6)
+            lev = estado["apalancamiento"]
+            margen = abs(amt) * entrada / lev if lev else 0
             with lock:
                 estado["posiciones"].append({
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
-                    "sl": sl, "tp": tp, "sl_oid": sl_oid, "tp_oid": tp_oid,
-                    "cantidad": abs(int(qty)), "margen": round(margen, 2),
+                    "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
+                    "cantidad": abs(amt), "margen": round(margen, 2),
                     "g_pot": 0, "p_pot": 0, "confianza_ia": 0,
                     "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
@@ -1492,7 +1453,7 @@ def _sincronizar_con_kucoin():
             tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}")
 
     except Exception as e:
-        log.error(f"Sincronizacion KuCoin: {e}")
+        log.error(f"Sincronizacion Binance: {e}")
 
 def monitor_posiciones():
     ciclos = 0
@@ -1508,7 +1469,7 @@ def monitor_posiciones():
             # Cada 2 ciclos sincroniza con KuCoin (detecta cierres y posiciones perdidas)
             ciclos += 1
             if ciclos % 2 == 0:
-                _sincronizar_con_kucoin()
+                _sincronizar_con_binance()
         except Exception as e:
             log.error(f"Monitor posiciones: {e}")
         time.sleep(30)
@@ -1887,21 +1848,21 @@ def _enviar_reporte():
        f"BTC: {t_btc.upper()} | Horario: {'OK' if horario_ok else 'DESCANSO'}\n\n"
        f"Posiciones abiertas:\n{pos_txt}"
        f"{trump_txt}\n\n"
-       f"Exchange: KuCoin Futuros")
+       f"Exchange: Binance Futures")
 
 # ─── VERIFICACION INICIAL ─────────────────────────────────────────────────────
 
 def verificar_inicio():
     errores = []
 
-    log.info("Verificando KuCoin API...")
-    b = balance_kucoin()
+    log.info("Verificando Binance API...")
+    b = balance_binance()
     if b == 0:
-        errores.append("KuCoin API: balance=0 (verifica KUCOIN_API_KEY, SECRET y PASSPHRASE)")
+        errores.append("Binance API: balance=0 (verifica BINANCE_API_KEY y BINANCE_SECRET)")
     else:
-        log.info(f"KuCoin OK — Balance USDT: ${b:.2f}")
-        estado["capital"]           = b
-        estado["capital_inicial"]   = b
+        log.info(f"Binance OK — Balance USDT: ${b:.2f}")
+        estado["capital"]            = b
+        estado["capital_inicial"]    = b
         estado["capital_inicio_dia"] = b
 
     log.info("Verificando DeepSeek API...")
@@ -1929,7 +1890,7 @@ def verificar_inicio():
     else:
         log.warning("Telegram no configurado — notificaciones desactivadas")
 
-    log.info("Verificando pares en KuCoin Futuros...")
+    log.info("Verificando pares en Binance Futures...")
     pares_ok = []
     for s in list(estado["pares_activos"]):
         pc = precio(s)
@@ -1938,79 +1899,49 @@ def verificar_inicio():
             log.info(f"  {s} OK — ${pc:.4f}")
         else:
             log.warning(f"  {s} no disponible — removido")
-
     estado["pares_activos"] = pares_ok
 
-    # Sincronizar posiciones abiertas desde KuCoin (por si el bot se reinicio)
-    log.info("Sincronizando posiciones abiertas desde KuCoin...")
+    # Sincronizar posiciones abiertas desde Binance (por si el bot se reinicio)
+    log.info("Sincronizando posiciones abiertas desde Binance...")
     try:
-        r = kc_get("/api/v1/positions")
-        pos_kucoin = [p for p in (r.get("data") or []) if float(p.get("currentQty", 0)) != 0] if r.get("code") == "200000" else []
-        # Fallback: consultar cada simbolo individualmente (cubre modo aislado)
-        if not pos_kucoin:
-            log.info("positions bulk vacio — consultando simbolos individualmente...")
-            for s in list(estado["pares_activos"]):
-                try:
-                    rp = kc_get("/api/v1/position", {"symbol": s})
-                    if rp.get("code") == "200000":
-                        pd_ = rp.get("data", {})
-                        if float(pd_.get("currentQty", 0)) != 0:
-                            pos_kucoin.append(pd_)
-                except Exception:
-                    pass
-        if r.get("code") == "200000" or True:
-            for pk in pos_kucoin:
-                simbolo = pk.get("symbol", "")
-                qty     = float(pk.get("currentQty", 0))
-                dir_    = "LONG" if qty > 0 else "SHORT"
-                # Bot SHORT: ignorar posiciones LONG
-                if dir_ == "LONG":
-                    log.info(f"Inicio: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
-                    continue
-                entrada = float(pk.get("avgEntryPrice", 0))
-                pc_     = float(pk.get("markPrice", entrada))
-                sl_pct_ = SL_PCT
-                tp_pct_ = TP_PCT
-                sl = round(entrada * (1 - sl_pct_) if dir_ == "LONG" else entrada * (1 + sl_pct_), 6)
-                tp = round(entrada * (1 + tp_pct_) if dir_ == "LONG" else entrada * (1 - tp_pct_), 6)
-                margen = abs(float(pk.get("posMargin", 0)))
-                ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-                if not ya_existe:
-                    # Buscar ordenes activas de SL/TP en KuCoin para este simbolo
-                    sl_oid_, tp_oid_ = None, None
-                    try:
-                        ords = kc_get("/api/v1/stopOrders", {"symbol": simbolo, "status": "active"})
-                        for o in (ords.get("data", {}).get("items") or []):
-                            side = o.get("side", "")
-                            stop = o.get("stop", "")
-                            oid  = o.get("clientOid", o.get("id", ""))
-                            if "sl_" in oid:
-                                sl_oid_ = oid
-                            elif "tp_" in oid:
-                                tp_oid_ = oid
-                    except Exception:
-                        pass
-                    estado["posiciones"].append({
-                        "simbolo":      simbolo,
-                        "dir":          dir_,
-                        "entrada":      entrada,
-                        "sl":           sl,
-                        "tp":           tp,
-                        "sl_oid":       sl_oid_,
-                        "tp_oid":       tp_oid_,
-                        "cantidad":     abs(int(qty)),
-                        "margen":       round(margen, 2),
-                        "g_pot":        round(margen * tp_pct_, 2),
-                        "p_pot":        round(margen * sl_pct_, 2),
-                        "confianza_ia": 0,
-                        "tipo":         "recuperada",
-                        "ts":           datetime.now().isoformat(),
-                    })
-                    log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} sl_oid={sl_oid_} tp_oid={tp_oid_}")
-        if pos_kucoin:
-            tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_kucoin)} posicion(es) restauradas al monitor.")
+        r = bn_get("/fapi/v2/positionRisk")
+        pos_bn = [p for p in (r.get("data") or [])
+                  if abs(float(p.get("positionAmt", 0))) > 0 and p.get("symbol") in PARES]
+        for pk in pos_bn:
+            simbolo = pk.get("symbol", "")
+            amt     = float(pk.get("positionAmt", 0))
+            dir_    = "LONG" if amt > 0 else "SHORT"
+            if dir_ == "LONG":
+                log.info(f"Inicio: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
+                continue
+            entrada = float(pk.get("entryPrice", 0))
+            sl = round(entrada * (1 + SL_PCT), 6)
+            tp = round(entrada * (1 - TP_PCT), 6)
+            lev = estado["apalancamiento"]
+            margen = abs(amt) * entrada / lev if lev else 0
+            ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
+            if not ya_existe:
+                estado["posiciones"].append({
+                    "simbolo":      simbolo,
+                    "dir":          dir_,
+                    "entrada":      entrada,
+                    "sl":           sl,
+                    "tp":           tp,
+                    "sl_oid":       None,
+                    "tp_oid":       None,
+                    "cantidad":     abs(amt),
+                    "margen":       round(margen, 2),
+                    "g_pot":        round(margen * TP_PCT, 2),
+                    "p_pot":        round(margen * SL_PCT, 2),
+                    "confianza_ia": 0,
+                    "tipo":         "recuperada",
+                    "ts":           datetime.now().isoformat(),
+                })
+                log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
+        if pos_bn:
+            tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bn)} posicion(es) restauradas al monitor.")
         else:
-            log.info("Sin posiciones abiertas en KuCoin al iniciar.")
+            log.info("Sin posiciones abiertas en Binance al iniciar.")
     except Exception as e:
         log.error(f"Sincronizacion posiciones: {e}")
 
@@ -2020,11 +1951,10 @@ def verificar_inicio():
         log.critical(f"Errores de inicio: {errores}")
         raise SystemExit(1)
 
-    tg(f"SMC BOT v13 INICIADO\n\n"
+    tg(f"SMC BOT SHORT BINANCE INICIADO\n\n"
        f"Pares: {len(pares_ok)} | Capital: ${estado['capital']:.2f} USDT\n"
        f"x{estado['apalancamiento']} | TP: {TP_PCT*100:.0f}% | SL: {SL_PCT*100:.0f}%\n"
-       f"Capital dinamico: 50/75/100% segun confianza IA\n"
-       f"Trailing stop: activa desde +15%\n"
+       f"Capital dinamico: 35/65/100% segun confianza IA\n"
        f"SL diario: {SL_DIARIO_PCT*100:.0f}% | Max posiciones: {MAX_POSICIONES}\n"
        f"Ciclo: 5-15 min | Horario: 6am-2am Chile\n\n"
        f"{', '.join(pares_ok)}\n\nActivo 24/7 en Railway")
@@ -2039,7 +1969,7 @@ def index():
 
 @app.route("/api/estado")
 def api_estado():
-    bal_real = balance_kucoin()
+    bal_real = balance_binance()
     if bal_real > 0:
         with lock:
             estado["capital"] = bal_real
@@ -2142,33 +2072,13 @@ def api_historial():
 
 @app.route("/api/test_orden")
 def api_test_orden():
-    """Coloca una orden limite SHORT en SOL a precio imposible y la cancela — prueba sin riesgo."""
+    """Prueba de conectividad Binance — verifica balance y precio."""
     try:
-        pc = precio("SOLUSDTM")
-        if not pc:
-            return jsonify({"ok": False, "error": "Sin precio SOL"})
-
-        # Orden LIMIT a precio muy por encima del mercado (nunca se ejecuta)
-        precio_limite = round(pc * 1.50, 3)  # 50% por encima — imposible de tocar
-        oid = f"test_{int(time.time()*1000)}"
-
-        r = kc_post("/api/v1/orders", {
-            "clientOid": oid,
-            "symbol":    "SOLUSDTM",
-            "side":      "sell",
-            "type":      "limit",
-            "size":      1,
-            "price":     str(precio_limite),
-            "leverage":  "10",
-            "postOnly":  True,
-        })
-
-        if r and r.get("code") == "200000":
-            order_id = r.get("data", {}).get("orderId", oid)
-            kc_delete(f"/api/v1/orders/{order_id}")
-            return jsonify({"ok": True, "mensaje": f"Orden colocada y cancelada OK | precio_limite=${precio_limite} | id={order_id}"})
-        else:
-            return jsonify({"ok": False, "error": str(r)})
+        b = balance_binance()
+        pc_btc = precio("BTCUSDT")
+        if b >= 0 and pc_btc > 0:
+            return jsonify({"ok": True, "mensaje": f"Binance API OK — Balance USDT: ${b:.2f} | BTC: ${pc_btc:.2f}"})
+        return jsonify({"ok": False, "error": "No se pudo obtener balance o precio"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -2187,19 +2097,19 @@ def api_cerrar_manual():
     p  = pos[0]
     pc = precio(simbolo) or p["entrada"]
     lado_cierre = "sell" if p["dir"] == "LONG" else "buy"
-    # Cancelar TP y SL pendientes
+    # Cancelar TP y SL pendientes en Binance
     for oid_key in ("sl_oid", "tp_oid"):
         oid = p.get(oid_key)
         if oid:
-            kc_delete(f"/api/v1/orders/{oid}")
+            bn_delete("/fapi/v1/order", {"symbol": simbolo, "origClientOrderId": oid})
     # Orden de mercado para cerrar
-    r = kc_post("/api/v1/orders", {
-        "clientOid":  f"close_{int(time.time()*1000)}",
+    lado_cierre_bn = "BUY" if p["dir"] == "SHORT" else "SELL"
+    r = bn_post("/fapi/v1/order", {
         "symbol":     simbolo,
-        "side":       lado_cierre,
-        "type":       "market",
-        "size":       p.get("cantidad", 1),
-        "reduceOnly": True,
+        "side":       lado_cierre_bn,
+        "type":       "MARKET",
+        "quantity":   str(p.get("cantidad", 1)),
+        "reduceOnly": "true",
     })
     # Remover posicion del estado interno inmediatamente
     with lock:
@@ -2248,7 +2158,7 @@ def iniciar_servidor():
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    log.info("SMC Bot KuCoin v2 iniciando...")
+    log.info("SMC Bot SHORT Binance iniciando...")
 
     verificar_inicio()
 
@@ -2276,8 +2186,8 @@ def main():
 
         # Verificar balance real en KuCoin Futuros cada 5 ciclos
         if ciclo % 5 == 1:
-            bal_real = balance_kucoin()
-            log.info(f"Balance real KuCoin Futuros: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
+            bal_real = balance_binance()
+            log.info(f"Balance real Binance Futures: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
             if bal_real > 0:
                 with lock:
                     estado["capital"] = bal_real
