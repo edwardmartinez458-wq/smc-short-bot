@@ -1,6 +1,6 @@
 """
 SHORT Bot — Solo posiciones SHORT
-Exchange: KuCoin Futuros
+Exchange: Binance Futures
 Estrategia: EMA21 + EMA89 + RSI14 (solo bajista)
 Servidor: Railway 24/7
 - Solo abre SHORT cuando EMA21 < EMA89 + RSI 30-55
@@ -8,7 +8,7 @@ Servidor: Railway 24/7
 - Capital independiente del bot LONG
 """
 
-import os, time, logging, requests, hmac, hashlib, json, threading, base64, random
+import os, time, logging, requests, hmac, hashlib, json, threading, random
 import pandas as pd
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
@@ -1294,7 +1294,7 @@ def _cerrar_posicion(p: dict, pc: float):
     tp_ok = (p["dir"] == "LONG" and pc >= p["tp"]) or (p["dir"] == "SHORT" and pc <= p["tp"])
     sl_ok = (p["dir"] == "LONG" and pc <= p["sl"]) or (p["dir"] == "SHORT" and pc >= p["sl"])
 
-    # Trailing stop: mover SL en KuCoin cuando precio avanza 8% a favor
+    # Trailing stop: mover SL en Binance cuando precio avanza 8% a favor
     if not sl_ok and not tp_ok:
         entrada  = p["entrada"]
         mover    = False
@@ -1466,7 +1466,7 @@ def monitor_posiciones():
                 if pc:
                     _cerrar_posicion(p, pc)
                 time.sleep(1)
-            # Cada 2 ciclos sincroniza con KuCoin (detecta cierres y posiciones perdidas)
+            # Cada 2 ciclos sincroniza con Binance (detecta cierres y posiciones perdidas)
             ciclos += 1
             if ciclos % 2 == 0:
                 _sincronizar_con_binance()
@@ -2184,7 +2184,7 @@ def main():
 
         log.info(f"CICLO {ciclo} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Chile: {hora_chile()}h")
 
-        # Verificar balance real en KuCoin Futuros cada 5 ciclos
+        # Verificar balance real en Binance Futures cada 5 ciclos
         if ciclo % 5 == 1:
             bal_real = balance_binance()
             log.info(f"Balance real Binance Futures: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
