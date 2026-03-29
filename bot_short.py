@@ -1,6 +1,6 @@
 """
-SHORT Bot — Solo posiciones SHORT
-Exchange: KuCoin Futuros
+SMC Trading Bot — Smart Money Concepts
+Exchange: BingX Perpetual Futures
 Estrategia: EMA21 + EMA89 + RSI14 (solo bajista)
 Servidor: Railway 24/7
 - Solo abre SHORT cuando EMA21 < EMA89 + RSI 30-55
@@ -8,7 +8,7 @@ Servidor: Railway 24/7
 - Capital independiente del bot LONG
 """
 
-import os, time, logging, requests, hmac, hashlib, json, threading, base64, random
+import os, time, logging, requests, hmac, hashlib, json, threading, random
 import pandas as pd
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
@@ -19,37 +19,39 @@ load_dotenv()
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-KC_API_KEY     = os.getenv("KUCOIN_API_KEY")
-KC_SECRET      = os.getenv("KUCOIN_SECRET")
-KC_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE")
+BINGX_API_KEY     = os.getenv("BINGX_API_KEY")
+BINGX_SECRET      = os.getenv("BINGX_SECRET")
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 
-# Pares de ALTO volumen solamente (removidos ARB, OP, INJ por bajo volumen)
+# Pares BingX Perpetual Futures (solo SHORT)
 PARES = [
-    "XBTUSDTM",
-    "ETHUSDTM",
-    "SOLUSDTM",
-    "XRPUSDTM",
+    "BTC-USDT",
+    "ETH-USDT",
+    "SOL-USDT",
+    "XRP-USDT",
 ]
+
+# Precision de cantidad por par
+BX_QTY_PRECISION = {
+    "BTC-USDT": 3,
+    "ETH-USDT": 2,
+    "SOL-USDT": 1,
+    "XRP-USDT": 0,
+}
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
 APALANCAMIENTO = int(os.getenv("APALANCAMIENTO", "10"))
 TP_PCT         = 0.15
 SL_PCT         = 0.07
-TP_REBOTE      = 0.05   # Rebote contra tendencia: objetivo conservador
-SL_REBOTE      = 0.03   # Rebote contra tendencia: stop ajustado
-TP_BREAKOUT    = 0.05   # Breakout: objetivo conservador
-SL_BREAKOUT    = 0.025  # Breakout: stop muy ajustado
+TP_REBOTE      = 0.05
+SL_REBOTE      = 0.03
 MAX_POSICIONES = 3
 CB_LIMITE      = 5
-BASE_URL       = "https://api-futures.kucoin.com"
+BASE_URL       = "https://open-api.bingx.com"
 
-# Stop loss global diario: si el capital cae mas de 10% en el dia -> pausar
-SL_DIARIO_PCT  = 0.15  # 15% diario — proteccion real de capital
-
-# Ciclo aleatorio entre 5 y 15 minutos
+SL_DIARIO_PCT  = 0.15
 CICLO_MIN_SEG  = 5 * 60
 CICLO_MAX_SEG  = 15 * 60
 
@@ -66,11 +68,9 @@ os.makedirs("logs", exist_ok=True)
 log = logging.getLogger("smc_bot")
 log.setLevel(logging.INFO)
 fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-
 ch = logging.StreamHandler()
 ch.setFormatter(fmt)
 log.addHandler(ch)
-
 fh = TimedRotatingFileHandler("logs/bot.log", when="midnight", backupCount=7)
 fh.setFormatter(fmt)
 log.addHandler(fh)
@@ -85,14 +85,14 @@ estado = {
     "ops_ganadas":       0,
     "capital":           CAPITAL_TOTAL,
     "capital_inicial":   CAPITAL_TOTAL,
-    "capital_inicio_dia": CAPITAL_TOTAL,  # Para SL diario
+    "capital_inicio_dia": CAPITAL_TOTAL,
     "apalancamiento":    APALANCAMIENTO,
     "pares_activos":     list(PARES),
     "ultimo_trump_id":   None,
     "ultimo_trump_texto": "",
     "trump_alerta_activa": False,
     "trump_direccion":   "",
-    "tendencia_btc":     "lateral",  # Para filtro tendencia mayor
+    "tendencia_btc":     "lateral",
     "ciclo":             0,
     "sl_diario_activo":  False,
 }
@@ -101,24 +101,19 @@ lock = threading.Lock()
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
 def hora_chile() -> int:
-    """Retorna hora actual en UTC-4 (Venezuela, sin cambio de horario)"""
     from datetime import timezone, timedelta
     tz_fija = timezone(timedelta(hours=-4))
     return datetime.now(tz_fija).hour
 
 def en_horario_operacion() -> bool:
-    """Retorna True si es horario valido para operar (6am a 2am Chile)"""
     h = hora_chile()
-    # Operar de 6am a 2am = NO operar de 2am a 6am
     if 2 <= h < 6:
         return False
     return True
 
 def reset_sl_diario():
-    """Resetea el capital de inicio del dia cada medianoche"""
     while True:
         ahora = datetime.now()
-        # Esperar hasta medianoche
         segundos = (24 - ahora.hour) * 3600 - ahora.minute * 60 - ahora.second
         time.sleep(segundos)
         with lock:
@@ -127,15 +122,12 @@ def reset_sl_diario():
         log.info(f"SL diario reseteado — Capital inicio dia: ${estado['capital']:.2f}")
 
 def verificar_sl_diario():
-    """Pausa el bot si el capital cayo mas de 10% en el dia"""
     with lock:
         cap_ini_dia = estado["capital_inicio_dia"]
         cap_actual  = estado["capital"]
         sl_activo   = estado["sl_diario_activo"]
-
     if sl_activo:
         return
-
     caida = (cap_ini_dia - cap_actual) / cap_ini_dia if cap_ini_dia > 0 else 0
     if caida >= SL_DIARIO_PCT:
         with lock:
@@ -148,10 +140,9 @@ def verificar_sl_diario():
         tg(msg)
         log.warning(f"SL diario activado — caida {caida*100:.1f}%")
 
-# ─── FEAR & GREED + FUNDING RATE ─────────────────────────────────────────────
+# ─── FEAR & GREED ─────────────────────────────────────────────────────────────
 
 def obtener_fear_greed() -> str:
-    """Obtiene el Fear & Greed Index de crypto (0=miedo extremo, 100=codicia extrema)."""
     try:
         r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
         val  = int(r["data"][0]["value"])
@@ -160,12 +151,16 @@ def obtener_fear_greed() -> str:
     except Exception:
         return ""
 
+def obtener_multiplicador(simbolo: str) -> float:
+    return 1.0
+
 def obtener_funding_rate(simbolo: str) -> str:
-    """Obtiene el funding rate actual del par en KuCoin Futuros."""
     try:
-        r = kc_get(f"/api/v1/funding-rate/{simbolo}/current")
-        if r.get("code") == "200000":
-            rate = float(r["data"]["value"]) * 100
+        r = requests.get(f"{BASE_URL}/openApi/swap/v2/quote/fundingRate",
+                         params={"symbol": simbolo}, timeout=5)
+        d = r.json()
+        if d.get("code") == 0:
+            rate = float(d["data"].get("fundingRate", 0)) * 100
             sesgo = "SHORT (mercado muy largo)" if rate > 0.05 else "LONG (mercado muy corto)" if rate < -0.05 else "neutral"
             return f"Funding Rate: {rate:.4f}% → sesgo {sesgo}"
     except Exception:
@@ -175,20 +170,17 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
-    """Actualiza la tendencia de BTC cada 30 min para filtrar operaciones"""
     while True:
         try:
-            df = velas("XBTUSDTM", "240", 50)
+            df = velas("BTC-USDT", "240", 50)
             if not df.empty:
                 t = tendencia(df)
-                df_d = velas("XBTUSDTM", "1440", 10)
+                df_d = velas("BTC-USDT", "1440", 10)
                 if not df_d.empty and len(df_d) >= 7:
                     cambio_7d = (df_d["close"].iloc[-1] - df_d["close"].iloc[-7]) / df_d["close"].iloc[-7]
-                    # Crash >8% en 7 dias: solo SHORT
                     if cambio_7d < -0.08 and t != "bajista":
                         t = "bajista"
                         log.info(f"BTC crash ({cambio_7d*100:.1f}% en 7d) — solo SHORT")
-                    # Rally >8% en 7 dias: solo LONG
                     elif cambio_7d > 0.08 and t != "alcista":
                         t = "alcista"
                         log.info(f"BTC rally ({cambio_7d*100:.1f}% en 7d) — solo LONG")
@@ -201,20 +193,14 @@ def actualizar_tendencia_btc():
         time.sleep(30 * 60)
 
 def filtro_tendencia_btc(dir_operacion: str) -> bool:
-    """
-    Retorna True si la operacion va en la misma direccion que BTC.
-    Si BTC esta lateral, permite ambas direcciones.
-    """
     with lock:
         t_btc = estado["tendencia_btc"]
-
     if t_btc == "lateral":
-        return True  # Mercado lateral: permite ambas direcciones
+        return True
     if t_btc == "alcista" and dir_operacion == "alcista":
         return True
     if t_btc == "bajista" and dir_operacion == "bajista":
         return True
-
     log.info(f"Filtro BTC: tendencia {t_btc} — operacion {dir_operacion} bloqueada")
     return False
 
@@ -266,16 +252,13 @@ def manejar_comando(texto: str):
             estado["sl_diario_activo"]  = False
         tg("Bot reactivado. Circuit breaker y SL diario reseteados.")
         log.info("Bot reactivado por Telegram")
-
     elif texto == "/estado":
         _enviar_reporte()
-
     elif texto == "/pausar":
         with lock:
             estado["circuit_breaker"] = True
         tg("Bot pausado manualmente. Usa /reactivar para continuar.")
         log.info("Bot pausado por Telegram")
-
     elif texto == "/capital":
         with lock:
             cap    = estado["capital"]
@@ -290,17 +273,15 @@ def manejar_comando(texto: str):
            f"Variacion hoy: {'-' if caida_dia > 0 else '+'}{abs(caida_dia):.1f}%\n"
            f"Win Rate: {wr:.0f}% ({ops_g}/{ops_t})\n"
            f"Apalancamiento: x{lev}")
-
     elif texto == "/trump":
         with lock:
-            txt   = estado["ultimo_trump_texto"]
-            dir_  = estado["trump_direccion"]
+            txt    = estado["ultimo_trump_texto"]
+            dir_   = estado["trump_direccion"]
             activa = estado["trump_alerta_activa"]
         if txt:
             tg(f"Ultimo post Trump:\n\n{txt}\n\nImpacto: {dir_}\nAlerta activa: {'SI' if activa else 'NO'}")
         else:
             tg("No hay posts recientes de Trump detectados.")
-
     elif texto == "/horario":
         h = hora_chile()
         operando = en_horario_operacion()
@@ -317,9 +298,7 @@ def obtener_posts_trump() -> list:
     ]
     for url in urls:
         try:
-            r = requests.get(url, timeout=15, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; TradingBot/1.0)"
-            })
+            r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; TradingBot/1.0)"})
             if r.status_code != 200:
                 continue
             contenido = r.text
@@ -421,7 +400,7 @@ def obtener_noticias_fed() -> list:
                     posts.append({"id": guid, "texto": titulo, "fecha": fecha})
             if posts:
                 return posts
-        except Exception as e:
+        except Exception:
             continue
     return []
 
@@ -432,19 +411,17 @@ def monitor_fed():
         try:
             posts = obtener_noticias_fed()
             if not posts:
-                log.info("Fed: sin noticias nuevas")
                 time.sleep(15 * 60)
                 continue
             p = posts[0]
             if p["id"] == ultimo_id:
-                log.info("Fed: sin noticias nuevas")
                 time.sleep(15 * 60)
                 continue
             ultimo_id = p["id"]
             texto = p["texto"]
             log.info(f"Fed NOTICIA: {texto[:100]}")
             if any(kw in texto.lower() for kw in FED_KEYWORDS):
-                tg(f"🏦 <b>RESERVA FEDERAL</b>\n\n{texto}\n\n<i>Fuente: Google News</i>")
+                tg(f"<b>RESERVA FEDERAL</b>\n\n{texto}\n\n<i>Fuente: Google News</i>")
             time.sleep(15 * 60)
         except Exception as e:
             log.error(f"Monitor Fed: {e}")
@@ -460,57 +437,41 @@ def monitor_trump():
                 log.info("Trump: sin posts nuevos o RSS no disponible")
                 time.sleep(10 * 60)
                 continue
-
             post_nuevo = posts[0]
             with lock:
                 ultimo_id = estado["ultimo_trump_id"]
-
             if post_nuevo["id"] == ultimo_id:
                 log.info(f"Trump: sin posts nuevos desde {post_nuevo['fecha']}")
                 time.sleep(10 * 60)
                 continue
-
             texto = post_nuevo["texto"]
             log.info(f"Trump POST NUEVO: {texto[:100]}...")
-
             with lock:
                 estado["ultimo_trump_id"]    = post_nuevo["id"]
                 estado["ultimo_trump_texto"] = texto
-
             if not es_relevante_para_crypto(texto):
                 log.info("Trump: post no relevante para crypto — ignorando")
                 tg(f"Trump publico (no relevante para crypto):\n\n{texto[:200]}...")
                 time.sleep(10 * 60)
                 continue
-
             log.info("Trump: post relevante — analizando con IA...")
             analisis = analizar_trump_ia(texto)
-
             with lock:
                 estado["trump_direccion"]     = analisis["impacto"]
                 estado["trump_alerta_activa"] = analisis["urgencia"] == "ALTA" and analisis["confianza"] >= 60
-
-            emoji = "📈" if analisis["impacto"] == "ALCISTA" else "📉" if analisis["impacto"] == "BAJISTA" else "⚡"
-            urgencia_emoji = "🚨" if analisis["urgencia"] == "ALTA" else "⚠️" if analisis["urgencia"] == "MEDIA" else "ℹ️"
-
-            msg = (
-                f"{urgencia_emoji} TRUMP EN TRUTH SOCIAL\n\n"
-                f'"{texto[:300]}"\n\n'
-                f"{emoji} Impacto crypto: {analisis['impacto']}\n"
-                f"Confianza IA: {analisis['confianza']}%\n"
-                f"Urgencia: {analisis['urgencia']}\n"
-                f"Razon: {analisis['razon']}\n\n"
-                f"{'🎯 Bot ajustando estrategia...' if estado['trump_alerta_activa'] else 'Bot continua estrategia normal'}"
-            )
-            tg(msg)
+            tg(f"TRUMP EN TRUTH SOCIAL\n\n"
+               f'"{texto[:300]}"\n\n'
+               f"Impacto crypto: {analisis['impacto']}\n"
+               f"Confianza IA: {analisis['confianza']}%\n"
+               f"Urgencia: {analisis['urgencia']}\n"
+               f"Razon: {analisis['razon']}\n\n"
+               f"{'Bot ajustando estrategia...' if estado['trump_alerta_activa'] else 'Bot continua estrategia normal'}")
             log.info(f"Trump analizado: {analisis['impacto']} {analisis['confianza']}% | {analisis['razon']}")
-
         except Exception as e:
             log.error(f"Monitor Trump: {e}")
-
         time.sleep(10 * 60)
 
-# ─── SEC MONITOR ──────────────────────────────────────────────────────────────
+# ─── SEC / CPI / LIQUIDACIONES / BALLENAS MONITOR ────────────────────────────
 
 SEC_KEYWORDS = [
     "bitcoin", "crypto", "ethereum", "etf", "blockchain", "coinbase",
@@ -533,13 +494,11 @@ def monitor_sec():
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in SEC_KEYWORDS):
                         ultimo_id = guid
                         log.info(f"SEC NOTICIA: {titulo[:100]}")
-                        tg(f"⚖️ <b>SEC / REGULACION</b>\n\n{titulo}\n\n<i>Puede mover el mercado — revisar posiciones</i>")
+                        tg(f"<b>SEC / REGULACION</b>\n\n{titulo}\n\n<i>Puede mover el mercado — revisar posiciones</i>")
                         break
         except Exception as e:
             log.error(f"Monitor SEC: {e}")
         time.sleep(20 * 60)
-
-# ─── CPI MONITOR ──────────────────────────────────────────────────────────────
 
 def monitor_cpi():
     time.sleep(90)
@@ -558,20 +517,17 @@ def monitor_cpi():
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in kws):
                         ultimo_id = guid
                         log.info(f"CPI NOTICIA: {titulo[:100]}")
-                        tg(f"📊 <b>CPI / INFLACION</b>\n\n{titulo}\n\n<i>Dato macro — BTC suele moverse 3-8% en proximas horas</i>")
+                        tg(f"<b>CPI / INFLACION</b>\n\n{titulo}\n\n<i>Dato macro — BTC suele moverse 3-8% en proximas horas</i>")
                         break
         except Exception as e:
             log.error(f"Monitor CPI: {e}")
         time.sleep(30 * 60)
-
-# ─── LIQUIDACIONES MONITOR ────────────────────────────────────────────────────
 
 def monitor_liquidaciones():
     time.sleep(120)
     ultimo_alerta = 0
     while True:
         try:
-            # CoinGlass API publica — liquidaciones totales 1h
             r = requests.get(
                 "https://open-api.coinglass.com/public/v2/liquidation_history",
                 params={"symbol": "BTC", "interval": "1h"},
@@ -588,18 +544,13 @@ def monitor_liquidaciones():
                     if total > 300_000_000 and (ahora - ultimo_alerta) > 3600:
                         ultimo_alerta = ahora
                         dir_ = "BAJISTA" if longs > shorts else "ALCISTA"
-                        log.info(f"LIQUIDACION MASIVA: ${total/1e6:.0f}M — {dir_}")
-                        tg(f"💥 <b>LIQUIDACION MASIVA</b>\n\n"
+                        tg(f"<b>LIQUIDACION MASIVA</b>\n\n"
                            f"Total: ${total/1e6:.0f}M USD en 1h\n"
-                           f"Longs liquidados: ${longs/1e6:.0f}M\n"
-                           f"Shorts liquidados: ${shorts/1e6:.0f}M\n"
-                           f"Señal: {dir_}\n\n"
-                           f"<i>Posible reversión inminente</i>")
+                           f"Longs: ${longs/1e6:.0f}M | Shorts: ${shorts/1e6:.0f}M\n"
+                           f"Señal: {dir_}\n\n<i>Posible reversion inminente</i>")
         except Exception as e:
             log.error(f"Monitor liquidaciones: {e}")
         time.sleep(15 * 60)
-
-# ─── BALLENAS MONITOR ─────────────────────────────────────────────────────────
 
 def monitor_ballenas():
     time.sleep(150)
@@ -617,224 +568,198 @@ def monitor_ballenas():
                     kws    = ["whale", "large transfer", "billion", "moved to exchange", "wallet"]
                     if guid and guid != ultimo_id and any(kw in titulo.lower() for kw in kws):
                         ultimo_id = guid
-                        log.info(f"BALLENA: {titulo[:100]}")
-                        tg(f"🐋 <b>MOVIMIENTO BALLENA</b>\n\n{titulo}\n\n<i>Monitorear precio en proximos 30 min</i>")
+                        tg(f"<b>MOVIMIENTO BALLENA</b>\n\n{titulo}\n\n<i>Monitorear precio en proximos 30 min</i>")
                         break
         except Exception as e:
             log.error(f"Monitor ballenas: {e}")
         time.sleep(25 * 60)
 
-# ─── KUCOIN FUTURES API ───────────────────────────────────────────────────────
+# ─── BINGX PERPETUAL FUTURES API ─────────────────────────────────────────────
 
-def kc_sign(timestamp: str, method: str, endpoint: str, body: str = "") -> tuple:
-    msg = timestamp + method + endpoint + body
-    sig = base64.b64encode(
-        hmac.new(KC_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
-    ).decode()
-    pp  = base64.b64encode(
-        hmac.new(KC_SECRET.encode(), KC_PASSPHRASE.encode(), hashlib.sha256).digest()
-    ).decode()
-    return sig, pp
+def bx_sign(params: dict) -> str:
+    qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    return hmac.new(BINGX_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
-def kc_headers(method: str, endpoint: str, body: str = "") -> dict:
-    ts  = str(int(time.time() * 1000))
-    sig, pp = kc_sign(ts, method, endpoint, body)
-    return {
-        "KC-API-KEY":         KC_API_KEY,
-        "KC-API-SIGN":        sig,
-        "KC-API-TIMESTAMP":   ts,
-        "KC-API-PASSPHRASE":  pp,
-        "KC-API-KEY-VERSION": "2",
-        "Content-Type":       "application/json",
-    }
+def bx_headers() -> dict:
+    return {"X-BX-APIKEY": BINGX_API_KEY}
 
-def kc_get(endpoint: str, params: dict = None) -> dict:
-    qs = ""
-    if params:
-        qs = "?" + "&".join(f"{k}={v}" for k, v in params.items())
+def bx_get(endpoint: str, params: dict = None) -> dict:
+    p = params or {}
+    p["timestamp"] = int(time.time() * 1000)
+    p["signature"] = bx_sign(p)
     for intento in range(4):
         try:
-            r = requests.get(
-                f"{BASE_URL}{endpoint}{qs}",
-                headers=kc_headers("GET", endpoint + qs),
-                timeout=10
-            )
-            if r.status_code == 429:
-                log.warning("KuCoin rate limit — esperando 60s")
-                time.sleep(60)
-                continue
+            r = requests.get(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            log.error(f"KuCoin GET {endpoint}: {d.get('code')} {d.get('msg')}")
+            if d.get("code") == 0:
+                return {"code": "200000", "data": d.get("data")}
+            log.error(f"BingX GET {endpoint}: {d.get('code')} {d.get('msg')}")
             return {}
         except requests.exceptions.ConnectionError:
             log.error(f"Sin conexion (intento {intento+1}) — reintentando en 30s")
             time.sleep(30)
         except Exception as e:
-            log.error(f"KuCoin GET {endpoint}: {e}")
+            log.error(f"BingX GET {endpoint}: {e}")
             return {}
     return {}
 
-def kc_delete(endpoint: str) -> dict:
+def bx_delete(endpoint: str, params: dict = None) -> dict:
+    p = params or {}
+    p["timestamp"] = int(time.time() * 1000)
+    p["signature"] = bx_sign(p)
     for intento in range(3):
         try:
-            r = requests.delete(
-                f"{BASE_URL}{endpoint}",
-                headers=kc_headers("DELETE", endpoint),
-                timeout=10
-            )
+            r = requests.delete(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            log.warning(f"KuCoin DELETE {endpoint}: {d.get('code')} {d.get('msg')}")
+            if d.get("code") == 0:
+                return {"code": "200000", "data": d.get("data")}
+            log.warning(f"BingX DELETE {endpoint}: {d}")
             return {}
         except Exception as e:
-            log.error(f"KuCoin DELETE {endpoint}: {e}")
+            log.error(f"BingX DELETE {endpoint}: {e}")
     return {}
 
-def kc_post(endpoint: str, body: dict) -> dict:
+def bx_post(endpoint: str, params: dict) -> dict:
     for intento in range(4):
         try:
-            body_str = json.dumps(body)
-            r = requests.post(
-                f"{BASE_URL}{endpoint}",
-                headers=kc_headers("POST", endpoint, body_str),
-                data=body_str,
-                timeout=10
-            )
-            if r.status_code == 429:
-                log.warning("KuCoin rate limit — esperando 60s")
-                time.sleep(60)
-                continue
+            p = dict(params)
+            p["timestamp"] = int(time.time() * 1000)
+            p["signature"] = bx_sign(p)
+            r = requests.post(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
             d = r.json()
-            if d.get("code") == "200000":
-                return d
-            msg  = d.get("msg", "")
-            code = d.get("code", "")
-            log.error(f"KuCoin POST {endpoint}: code={code} msg={msg}")
-            if any(w in msg.lower() for w in ["insufficient", "available"]):
+            if d.get("code") == 0:
+                return {"code": "200000", "data": d.get("data")}
+            msg  = d.get("msg", "") if isinstance(d, dict) else str(d)
+            code = d.get("code", "") if isinstance(d, dict) else ""
+            log.error(f"BingX POST {endpoint}: code={code} msg={msg}")
+            if any(w in msg.lower() for w in ["insufficient", "available", "balance"]):
                 return {"error": "insufficient_funds"}
-            if "margin mode" in msg.lower():
-                return {"error": "margin_mode"}
             return {}
         except requests.exceptions.ConnectionError:
             log.error(f"Sin conexion (intento {intento+1}) — reintentando en 30s")
             time.sleep(30)
         except Exception as e:
-            log.error(f"KuCoin POST {endpoint}: {e}")
+            log.error(f"BingX POST {endpoint}: {e}")
             return {}
     return {}
 
+def _bx_interval(granularity: str) -> str:
+    m = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
+         "60": "1h", "120": "2h", "240": "4h", "480": "8h",
+         "720": "12h", "1440": "1d"}
+    return m.get(str(granularity), "4h")
+
 def velas(simbolo: str, intervalo: str, limit: int = 200) -> pd.DataFrame:
-    d = kc_get("/api/v1/kline/query", {
-        "symbol": simbolo, "granularity": intervalo, "limit": limit
-    })
-    if not d.get("data"):
-        return pd.DataFrame()
+    interval = _bx_interval(intervalo)
     try:
-        df = pd.DataFrame(d["data"], columns=["ts","open","high","low","close","volume","turnover"])
-        for col in ["open","high","low","close","volume"]:
+        r = requests.get(f"{BASE_URL}/openApi/swap/v3/quote/klines",
+            params={"symbol": simbolo, "interval": interval, "limit": min(limit, 1440)},
+            timeout=10)
+        data = r.json()
+        if data.get("code") != 0 or not data.get("data"):
+            return pd.DataFrame()
+        rows = data["data"]
+        df = pd.DataFrame(rows)
+        df = df.rename(columns={"time": "ts"})
+        for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-        return df.sort_values("ts").tail(limit).reset_index(drop=True)
+        return df[["ts", "open", "high", "low", "close", "volume"]].tail(limit).reset_index(drop=True)
     except Exception as e:
         log.error(f"Velas {simbolo}: {e}")
         return pd.DataFrame()
 
 def precio(simbolo: str) -> float:
-    d = kc_get("/api/v1/ticker", {"symbol": simbolo})
     try:
-        return float(d["data"]["price"])
+        r = requests.get(f"{BASE_URL}/openApi/swap/v2/quote/price",
+                         params={"symbol": simbolo}, timeout=10)
+        d = r.json()
+        if d.get("code") == 0:
+            return float(d["data"]["price"])
     except:
-        return 0.0
+        pass
+    return 0.0
 
-_multiplicadores = {}
-
-def obtener_multiplicador(simbolo: str) -> float:
-    if simbolo not in _multiplicadores:
-        try:
-            d = requests.get(f"{BASE_URL}/api/v1/contracts/{simbolo}", timeout=10).json()
-            _multiplicadores[simbolo] = float(d.get("data", {}).get("multiplier", 1))
-        except:
-            _multiplicadores[simbolo] = 1.0
-    return _multiplicadores[simbolo]
-
-def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> int:
-    """Calcula contratos usando el multiplicador real del contrato."""
+def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> float:
     with lock:
         cap = estado["capital"]
         lev = estado["apalancamiento"]
-    mult   = obtener_multiplicador(simbolo)
-    margen = cap * capital_pct * 0.90  # 10% buffer para fees
-    cant   = max(1, int((margen * lev) / (pc * mult)))
-    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | mult={mult} | Contratos: {cant}")
+    margen   = cap * capital_pct * 0.90
+    notional = margen * lev
+    precision = BX_QTY_PRECISION.get(simbolo, 3)
+    cant = round(notional / pc, precision)
+    min_qty = 10 ** (-precision)
+    cant = max(min_qty, cant)
+    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | qty={cant} {simbolo}")
     return cant
 
-def ejecutar_orden(simbolo: str, lado: str, cantidad: int, sl: float, tp: float, cant_tp: int = None) -> bool:
+def _bx_set_leverage(simbolo: str, lev: int):
+    try:
+        bx_post("/openApi/swap/v2/trade/leverage", {"symbol": simbolo, "side": "SHORT", "leverage": lev})
+    except Exception as e:
+        log.warning(f"Set leverage {simbolo}: {e}")
+
+def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: float, cant_tp: float = None):
     lev = estado["apalancamiento"]
     if cant_tp is None:
         cant_tp = cantidad
 
-    r = kc_post("/api/v1/orders", {
-        "clientOid": f"smc_{int(time.time()*1000)}",
-        "symbol":    simbolo,
-        "side":      lado,
-        "type":      "market",
-        "size":      cantidad,
-        "leverage":  str(lev),
+    _bx_set_leverage(simbolo, lev)
+
+    bx_side  = "SELL" if lado == "sell" else "BUY"
+    pos_side = "SHORT" if bx_side == "SELL" else "LONG"
+
+    r = bx_post("/openApi/swap/v2/trade/order", {
+        "symbol":       simbolo,
+        "side":         bx_side,
+        "positionSide": pos_side,
+        "type":         "MARKET",
+        "quantity":     str(cantidad),
     })
-    if not r or r.get("error") in ("insufficient_funds", "margin_mode"):
+    if not r or r.get("error") == "insufficient_funds":
         return False
 
-    close_s  = "sell" if lado == "buy" else "buy"
-    sl_oid   = f"sl_{int(time.time()*1000)}"
-    tp_oid   = f"tp_{int(time.time()*1000)+1}"
+    close_side = "BUY" if bx_side == "SELL" else "SELL"
+    sl_oid = f"sl{int(time.time()*1000)}"
+    tp_oid = f"tp{int(time.time()*1000)+1}"
 
-    kc_post("/api/v1/orders", {
-        "clientOid":     sl_oid,
+    bx_post("/openApi/swap/v2/trade/order", {
         "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "down" if lado == "buy" else "up",
+        "side":          close_side,
+        "positionSide":  pos_side,
+        "type":          "STOP_MARKET",
         "stopPrice":     str(sl),
-        "stopPriceType": "MP",
-        "size":          cantidad,
-        "leverage":      str(lev),
-        "reduceOnly":    True,
+        "closePosition": "true",
+        "clientOrderID": sl_oid,
     })
 
-    kc_post("/api/v1/orders", {
-        "clientOid":     tp_oid,
+    bx_post("/openApi/swap/v2/trade/order", {
         "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "up" if lado == "buy" else "down",
+        "side":          close_side,
+        "positionSide":  pos_side,
+        "type":          "TAKE_PROFIT_MARKET",
         "stopPrice":     str(tp),
-        "stopPriceType": "MP",
-        "size":          cant_tp,
-        "leverage":      str(lev),
-        "reduceOnly":    True,
+        "closePosition": "true",
+        "clientOrderID": tp_oid,
     })
     return sl_oid, tp_oid
 
-def balance_kucoin() -> float:
-    """Retorna el equity total de la cuenta (disponible + margen en uso)."""
-    d = kc_get("/api/v1/account-overview", {"currency": "USDT"})
+def balance_bingx() -> float:
     try:
-        data = d["data"]
-        # accountEquity = saldo disponible + margen usado + PnL no realizado
-        equity = float(data.get("accountEquity", data.get("availableBalance", 0)))
-        return equity
-    except:
-        return 0.0
+        result = bx_get("/openApi/swap/v2/user/balance")
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            bal_obj = data.get("balance", {})
+            return float(bal_obj.get("balance", 0))
+    except Exception as e:
+        log.error(f"Balance BingX: {e}")
+    return 0.0
 
 # ─── GESTION CAPITAL ──────────────────────────────────────────────────────────
 
 def recalcular_capital():
     cap_ini = estado["capital_inicial"]
     caida   = (cap_ini - estado["capital"]) / cap_ini if cap_ini > 0 else 0
-
     if caida >= 0.40:
         estado["circuit_breaker"] = True
         tg(f"CIRCUIT BREAKER PERMANENTE\nCapital cayo {caida*100:.0f}% del inicial (${estado['capital']:.2f}).\nBot detenido. Usa /reactivar para continuar.")
@@ -842,8 +767,6 @@ def recalcular_capital():
     elif caida >= 0.20 and estado["apalancamiento"] > 10:
         estado["apalancamiento"] = 10
         log.warning("Apalancamiento reducido a x10 por caida de capital")
-
-    # Verificar SL diario
     verificar_sl_diario()
 
 # ─── HISTORIAL ────────────────────────────────────────────────────────────────
@@ -871,9 +794,7 @@ def guardar_historial(simbolo, dir_, entrada, salida, pnl, resultado, confianza_
     except Exception as e:
         log.error(f"Historial: {e}")
 
-
 def guardar_memoria_trade(p: dict, pc: float, resultado: str, pnl: float):
-    """Guarda en memoria el contexto completo del trade para que la IA aprenda."""
     try:
         path = "memoria_trades.json"
         memoria = []
@@ -895,16 +816,13 @@ def guardar_memoria_trade(p: dict, pc: float, resultado: str, pnl: float):
             "pnl_usdt":      round(pnl, 2),
             "leccion":       f"{'GANO' if pnl > 0 else 'PERDIO'} {abs(pnl):.2f} USDT en {resultado}",
         })
-        # Guardar solo los ultimos 200 trades
         memoria = memoria[-200:]
         with open(path, "w") as f:
             json.dump(memoria, f, indent=2)
     except Exception as e:
         log.error(f"Memoria trades: {e}")
 
-
 def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
-    """Lee los ultimos N trades del simbolo para dar contexto a la IA."""
     try:
         path = "memoria_trades.json"
         if not os.path.exists(path):
@@ -940,41 +858,7 @@ def tendencia(df: pd.DataFrame) -> str:
     if c[-1] < ma20 * 0.998: return "bajista"
     return "lateral"
 
-def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
-    """Calcula el ADX (Average Directional Index). >25 = tendencia fuerte."""
-    if len(df) < periodo * 2: return 0.0
-    h = df["high"].values
-    l = df["low"].values
-    c = df["close"].values
-    tr_list, pdm_list, ndm_list = [], [], []
-    for i in range(1, len(c)):
-        tr  = max(h[i] - l[i], abs(h[i] - c[i-1]), abs(l[i] - c[i-1]))
-        pdm = max(h[i] - h[i-1], 0) if (h[i] - h[i-1]) > (l[i-1] - l[i]) else 0
-        ndm = max(l[i-1] - l[i], 0) if (l[i-1] - l[i]) > (h[i] - h[i-1]) else 0
-        tr_list.append(tr); pdm_list.append(pdm); ndm_list.append(ndm)
-    def wilder(arr, n):
-        s = sum(arr[:n])
-        result = [s]
-        for v in arr[n:]:
-            s = s - s/n + v
-            result.append(s)
-        return result
-    atr  = wilder(tr_list, periodo)
-    apdi = wilder(pdm_list, periodo)
-    andi = wilder(ndm_list, periodo)
-    dx_list = []
-    for i in range(len(atr)):
-        pdi = 100 * apdi[i] / atr[i] if atr[i] > 0 else 0
-        ndi = 100 * andi[i] / atr[i] if atr[i] > 0 else 0
-        dx  = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) > 0 else 0
-        dx_list.append(dx)
-    if len(dx_list) < periodo: return 0.0
-    adx = sum(dx_list[-periodo:]) / periodo
-    return round(adx, 2)
-
-
 def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
-    # BOS: 2 velas consecutivas de 15min en la misma direccion
     try:
         if simbolo:
             df15 = velas(simbolo, "15", 10)
@@ -987,7 +871,6 @@ def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
                     return True
     except Exception:
         pass
-    # Fallback sin requisito de volumen
     if len(df4h) < 20: return False
     u  = df4h.tail(20)
     pc = u["close"].iloc[-1]
@@ -1008,33 +891,14 @@ def buscar_ob(df: pd.DataFrame, t: str) -> dict:
 
 def en_ob(pc: float, ob: dict, t: str = "") -> bool:
     if not ob["valido"]: return False
-    # SHORT: acepta precio hasta 5% por debajo del OB (ya lo rompió)
     if t == "bajista":
         return pc <= ob["zona_alta"] and pc >= ob["zona_baja"] * 0.95
-    # LONG: acepta precio hasta 5% por encima del OB (ya lo rompió al alza)
     if t == "alcista":
         return pc >= ob["zona_baja"] and pc <= ob["zona_alta"] * 1.05
-    # Fallback generico
     m = (ob["zona_alta"] - ob["zona_baja"]) * 0.5
     return (ob["zona_baja"] - m) <= pc <= (ob["zona_alta"] + m)
 
-def contar_toques(df: pd.DataFrame, ob: dict, t: str) -> int:
-    if not ob["valido"]: return 0
-    toques = 0
-    zb, za = ob["zona_baja"] * 0.985, ob["zona_alta"] * 1.015
-    u = df.tail(40).reset_index(drop=True)
-    i = 0
-    while i < len(u) - 1:
-        v, s = u.iloc[i], u.iloc[i+1]
-        if t == "alcista" and zb <= v["low"] <= za and s["close"] > s["open"]:
-            toques += 1; i += 2; continue
-        if t == "bajista" and zb <= v["high"] <= za and s["close"] < s["open"]:
-            toques += 1; i += 2; continue
-        i += 1
-    return toques
-
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
-    """ATR (Average True Range) — mide la volatilidad real del mercado."""
     if len(df) < periodo + 1: return 0.0
     h = df["high"].values
     l = df["low"].values
@@ -1043,7 +907,6 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     return sum(trs[-periodo:]) / periodo
 
 def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> float:
-    """RSI — detecta sobrecompra/sobreventa."""
     if len(df) < periodo + 1: return 50.0
     c = df["close"].values
     deltas = [c[i] - c[i-1] for i in range(1, len(c))]
@@ -1055,40 +918,7 @@ def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> float:
     rs = ag / ap
     return round(100 - (100 / (1 + rs)), 2)
 
-def hay_divergencia_rsi(df: pd.DataFrame, t: str) -> bool:
-    """Detecta divergencia RSI: precio hace nuevo extremo pero RSI no lo confirma."""
-    if len(df) < 30: return False
-    mitad = len(df) // 2
-    rsi_rec = calcular_rsi(df.iloc[mitad:])
-    rsi_ant = calcular_rsi(df.iloc[:mitad])
-    pc_rec  = df["close"].values[-1]
-    pc_ant  = df["close"].values[mitad]
-    if t == "alcista":
-        # Precio sube pero RSI baja = agotamiento alcista (divergencia bajista)
-        return pc_rec > pc_ant and rsi_rec < rsi_ant - 5
-    if t == "bajista":
-        # Precio baja pero RSI sube = agotamiento bajista (divergencia alcista)
-        return pc_rec < pc_ant and rsi_rec > rsi_ant + 5
-    return False
-
-def buscar_fvg(df: pd.DataFrame, t: str) -> dict:
-    """Fair Value Gap: zona de desequilibrio entre 3 velas consecutivas."""
-    empty = {"zona_alta": 0, "zona_baja": 0, "valido": False}
-    if len(df) < 10: return empty
-    for i in range(len(df) - 3, max(len(df) - 20, 0), -1):
-        v1, v2, v3 = df.iloc[i], df.iloc[i+1], df.iloc[i+2]
-        if t == "alcista":
-            # FVG alcista: low de v3 > high de v1 (hueco entre v1 y v3)
-            if v3["low"] > v1["high"] and v2["close"] > v2["open"]:
-                return {"zona_alta": v3["low"], "zona_baja": v1["high"], "valido": True}
-        if t == "bajista":
-            # FVG bajista: high de v3 < low de v1 (hueco entre v1 y v3)
-            if v3["high"] < v1["low"] and v2["close"] < v2["open"]:
-                return {"zona_alta": v1["low"], "zona_baja": v3["high"], "valido": True}
-    return empty
-
 def sesion_activa() -> str:
-    """Retorna la sesion de mercado activa: Asia, Londres, NY, o fuera."""
     hora_utc = datetime.now(timezone.utc).hour
     if 0 <= hora_utc < 8:   return "Asia"
     if 8 <= hora_utc < 13:  return "Londres"
@@ -1096,15 +926,12 @@ def sesion_activa() -> str:
     return "fuera"
 
 def confirma_1h(df: pd.DataFrame, t: str) -> bool:
-    # Confirmacion: 2 de las ultimas 3 velas de 15min en la misma direccion
     if len(df) < 4: return False
     c, o = df["close"].values, df["open"].values
     if t == "alcista":
-        alcistas = sum(1 for i in [-1,-2,-3] if c[i] > o[i])
-        return alcistas >= 2
+        return sum(1 for i in [-1,-2,-3] if c[i] > o[i]) >= 2
     if t == "bajista":
-        bajistas = sum(1 for i in [-1,-2,-3] if c[i] < o[i])
-        return bajistas >= 2
+        return sum(1 for i in [-1,-2,-3] if c[i] < o[i]) >= 2
     return False
 
 # ─── FILTRO IA ────────────────────────────────────────────────────────────────
@@ -1131,13 +958,13 @@ def filtro_ia(simbolo, t, pc, ob, toques) -> dict:
             r = ai.chat.completions.create(
                 model="deepseek-chat",
                 max_tokens=300,
-                messages=[{"role": "user", "content": f"""Eres el filtro de riesgo de un bot SMC. Decide si entrar o no.
+                messages=[{"role": "user", "content": f"""Eres el filtro de riesgo de un bot SMC SHORT. Decide si entrar o no.
 
 SENAL:
 Par: {simbolo} | Fecha: {datetime.now().strftime('%Y-%m-%d %A')} | Mes: {datetime.now().month}
 Tendencia Daily: {t} | Tendencia BTC: {t_btc} | Precio: ${pc:.4f}
 Order Block: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-Direccion: {'LONG' if t == 'alcista' else 'SHORT'} | Hora Chile: {hora_chile()}h
+Direccion: SHORT | Hora Chile: {hora_chile()}h
 Sesion activa: {sesion} | RSI 4H: {rsi_actual}
 {fear_greed}
 {funding}
@@ -1145,11 +972,11 @@ Sesion activa: {sesion} | RSI 4H: {rsi_actual}
 {memoria_contexto}
 
 ANALIZA:
-1. El Fear & Greed apoya o contradice la entrada?
+1. El Fear & Greed apoya o contradice la entrada SHORT?
 2. El Funding Rate indica posicionamiento extremo que pueda revertirse?
-3. La tendencia BTC apoya la entrada?
-4. El RSI indica sobrecompra/sobreventa extrema que contradiga la entrada?
-5. La alerta Trump (si existe) apoya o contradice la entrada?
+3. La tendencia BTC apoya la entrada SHORT?
+4. El RSI indica sobrecompra extrema que confirme el SHORT?
+5. La alerta Trump (si existe) apoya o contradice el SHORT?
 6. El historial de trades previos apoya o desaconseja esta entrada?
 
 RESPONDE EXACTAMENTE (sin texto extra):
@@ -1178,69 +1005,56 @@ RAZON: una linea breve"""}]
 # ─── POSICIONES ───────────────────────────────────────────────────────────────
 
 def abrir(simbolo, t, pc, ia):
-    lev    = estado["apalancamiento"]
-    lado   = "buy" if t == "alcista" else "sell"
-    dir_   = "LONG" if lado == "buy" else "SHORT"
+    if t != "bajista":
+        log.info(f"{simbolo} — abrir() llamado con tendencia {t}, ignorado (solo SHORT)")
+        return
 
-    # SL basado en ATR (volatilidad real) — 2x ATR del 4H
     df_4h_sl = velas(simbolo, "240", 30)
     atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 2, pc * 0.03)  # minimo 3% si ATR es muy pequeno
+    sl_dist  = max(atr_val * 2, pc * 0.03)
     sl_pct   = sl_dist / pc
-    # TP parcial: TP1 a 1.5x ATR (asegurar ganancia), TP2 a 3x ATR (objetivo final)
-    tp1_dist = max(atr_val * 1.5, pc * 0.015)  # minimo 1.5%
-    tp2_dist = max(atr_val * 3.0, pc * 0.03)   # minimo 3%
-    sl  = round(pc - sl_dist  if lado == "buy" else pc + sl_dist,  6)
-    tp1 = round(pc + tp1_dist if lado == "buy" else pc - tp1_dist, 6)
-    tp2 = round(pc + tp2_dist if lado == "buy" else pc - tp2_dist, 6)
-    tp  = tp1  # compatibilidad con resto del codigo
+    tp1_dist = max(atr_val * 1.5, pc * 0.015)
+    tp2_dist = max(atr_val * 3.0, pc * 0.03)
+    sl  = round(pc + sl_dist, 6)
+    tp1 = round(pc - tp1_dist, 6)
+    tp2 = round(pc - tp2_dist, 6)
     log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
 
-    # Capital dinamico segun confianza IA
     confianza = ia.get("confianza", 55)
     if confianza >= 70:
-        capital_pct = 1.00  # 100% — alta seguridad
+        capital_pct = 1.00
     elif confianza >= 61:
-        capital_pct = 0.65  # 65%
+        capital_pct = 0.65
     else:
-        capital_pct = 0.35  # 35% — minimo
+        capital_pct = 0.35
     riesgo_usdt = estado["capital"] * capital_pct * sl_pct
     log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% | riesgo max ${riesgo_usdt:.2f}")
-    g_pot = riesgo_usdt * (TP_PCT / SL_PCT)
-    p_pot = riesgo_usdt
 
     margen = round(estado["capital"] * capital_pct, 2)
     cant   = calcular_cantidad(simbolo, pc, capital_pct)
 
-    # Cantidades para TP parcial (50% cada uno, minimo 1 contrato)
-    cant_tp1 = max(1, cant // 2)
-    cant_tp2 = max(1, cant - cant_tp1)
+    precision = BX_QTY_PRECISION.get(simbolo, 3)
+    cant_tp1 = round(cant / 2, precision)
+    cant_tp2 = round(cant - cant_tp1, precision)
+    min_qty  = 10 ** (-precision)
+    cant_tp1 = max(min_qty, cant_tp1)
+    cant_tp2 = max(min_qty, cant_tp2)
 
-    resultado = ejecutar_orden(simbolo, lado, cant, sl, tp1, cant_tp=cant_tp1)
+    resultado = ejecutar_orden(simbolo, "sell", cant, sl, tp1, cant_tp=cant_tp1)
     if not resultado:
         return
     sl_oid, tp1_oid = resultado
 
-    # Colocar TP2 para la otra mitad
-    close_s = "sell" if lado == "buy" else "buy"
-    tp2_oid = f"tp2_{int(time.time()*1000)}"
-    kc_post("/api/v1/orders", {
-        "clientOid":     tp2_oid,
-        "symbol":        simbolo,
-        "side":          close_s,
-        "type":          "market",
-        "stop":          "up" if lado == "buy" else "down",
-        "stopPrice":     str(tp2),
-        "stopPriceType": "MP",
-        "size":          cant_tp2,
-        "leverage":      str(estado["apalancamiento"]),
-        "reduceOnly":    True,
-    })
+    tp2_oid = f"tp2{int(time.time()*1000)}"
+    log.info(f"{simbolo} — TP2 ${tp2:.4f} configurado (monitoreo por software)")
+
+    g_pot = riesgo_usdt * (TP_PCT / SL_PCT)
+    p_pot = riesgo_usdt
 
     with lock:
         estado["posiciones"].append({
             "simbolo":      simbolo,
-            "dir":          dir_,
+            "dir":          "SHORT",
             "entrada":      pc,
             "sl":           sl,
             "tp":           tp1,
@@ -1262,13 +1076,12 @@ def abrir(simbolo, t, pc, ia):
         })
         estado["ops_total"] += 1
 
-    tg(f"ENTRADA {simbolo} {dir_} @ ${pc:.4f}\n"
+    tg(f"ENTRADA {simbolo} SHORT @ ${pc:.4f}\n"
        f"IA {ia['confianza']}% | Riesgo: ${p_pot:.2f} USDT\n"
        f"SL: ${sl:.4f} | TP1: ${tp1:.4f} (50%) | TP2: ${tp2:.4f} (50%)\n"
        f"Razon: {ia['razon']}")
 
 def _cerrar_posicion(p: dict, pc: float):
-    # ── TP1 parcial: cierra 50% y mueve SL a breakeven ────────────────────────
     if not p.get("tp1_hit", True) and "tp1" in p:
         tp1_ok = (p["dir"] == "LONG" and pc >= p["tp1"]) or (p["dir"] == "SHORT" and pc <= p["tp1"])
         if tp1_ok:
@@ -1277,37 +1090,34 @@ def _cerrar_posicion(p: dict, pc: float):
             mult = obtener_multiplicador(p["simbolo"])
             pnl_parcial = round((pc - p["entrada"]) * cant_tp1 * mult, 2) if p["dir"] == "LONG" \
                           else round((p["entrada"] - pc) * cant_tp1 * mult, 2)
-            # Cancelar SL actual y colocar nuevo SL en breakeven para cant_tp2
-            close_s = "sell" if p["dir"] == "LONG" else "buy"
+            close_side_bx = "SELL" if p["dir"] == "LONG" else "BUY"
+            pos_side_bx   = p["dir"]
             if p.get("sl_oid"):
-                kc_delete(f"/api/v1/orders/{p['sl_oid']}")
-            nuevo_sl_oid = f"sl_{int(time.time()*1000)}"
-            kc_post("/api/v1/orders", {
-                "clientOid":     nuevo_sl_oid,
+                bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
+            nuevo_sl_oid = f"sl{int(time.time()*1000)}"
+            bx_post("/openApi/swap/v2/trade/order", {
                 "symbol":        p["simbolo"],
-                "side":          close_s,
-                "type":          "market",
-                "stop":          "down" if p["dir"] == "LONG" else "up",
+                "side":          close_side_bx,
+                "positionSide":  pos_side_bx,
+                "type":          "STOP_MARKET",
                 "stopPrice":     str(p["entrada"]),
-                "stopPriceType": "MP",
-                "size":          cant_tp2,
-                "reduceOnly":    True,
+                "closePosition": "true",
+                "clientOrderID": nuevo_sl_oid,
             })
             with lock:
                 p["tp1_hit"] = True
-                p["sl"]      = p["entrada"]   # breakeven
+                p["sl"]      = p["entrada"]
                 p["sl_oid"]  = nuevo_sl_oid
-                p["tp"]      = p["tp2"]        # ahora monitorear TP2
+                p["tp"]      = p["tp2"]
                 p["cantidad"] = cant_tp2
                 estado["capital"] += pnl_parcial
             log.warning(f"{p['simbolo']} TP1 +${pnl_parcial:.2f} | SL → breakeven ${p['entrada']:.4f} | Esperando TP2 ${p['tp2']:.4f}")
-            tg(f"✅ TP1 {p['simbolo']} {p['dir']} +${pnl_parcial:.2f} USDT\nSL movido a breakeven — esperando TP2 ${p['tp2']:.4f}")
+            tg(f"TP1 {p['simbolo']} {p['dir']} +${pnl_parcial:.2f} USDT\nSL movido a breakeven — esperando TP2 ${p['tp2']:.4f}")
             return
 
     tp_ok = (p["dir"] == "LONG" and pc >= p["tp"]) or (p["dir"] == "SHORT" and pc <= p["tp"])
     sl_ok = (p["dir"] == "LONG" and pc <= p["sl"]) or (p["dir"] == "SHORT" and pc >= p["sl"])
 
-    # Trailing stop: mover SL en KuCoin cuando precio avanza 8% a favor
     if not sl_ok and not tp_ok:
         entrada  = p["entrada"]
         mover    = False
@@ -1321,35 +1131,31 @@ def _cerrar_posicion(p: dict, pc: float):
             if candidato < p["sl"]:
                 nuevo_sl = candidato; mover = True
         if mover:
-            close_s = "sell" if p["dir"] == "LONG" else "buy"
-            # Cancelar SL anterior en KuCoin
+            close_side_bx = "SELL" if p["dir"] == "LONG" else "BUY"
+            pos_side_bx   = p["dir"]
             if p.get("sl_oid"):
-                kc_delete(f"/api/v1/orders/{p['sl_oid']}")
-            # Colocar nuevo SL en KuCoin
-            nuevo_oid = f"sl_{int(time.time()*1000)}"
-            kc_post("/api/v1/orders", {
-                "clientOid":     nuevo_oid,
+                bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
+            nuevo_oid = f"sl{int(time.time()*1000)}"
+            bx_post("/openApi/swap/v2/trade/order", {
                 "symbol":        p["simbolo"],
-                "side":          close_s,
-                "type":          "market",
-                "stop":          "down" if p["dir"] == "LONG" else "up",
+                "side":          close_side_bx,
+                "positionSide":  pos_side_bx,
+                "type":          "STOP_MARKET",
                 "stopPrice":     str(nuevo_sl),
-                "stopPriceType": "MP",
-                "size":          p.get("cantidad", 1),
-                "reduceOnly":    True,
+                "closePosition": "true",
+                "clientOrderID": nuevo_oid,
             })
-            p["sl"]    = nuevo_sl
+            p["sl"]     = nuevo_sl
             p["sl_oid"] = nuevo_oid
-            log.info(f"{p['simbolo']} — Trailing SL actualizado en KuCoin: ${nuevo_sl:.4f}")
+            log.info(f"{p['simbolo']} — Trailing SL actualizado en BingX: ${nuevo_sl:.4f}")
 
-    # Cierre por cambio de tendencia (solo posiciones abiertas por el bot, no recuperadas)
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
                           (p["dir"] == "LONG"  and t_btc == "bajista")
     if tendencia_invertida and p.get("tipo") != "recuperada":
         log.info(f"{p['simbolo']} — CIERRE por cambio tendencia BTC ({t_btc}) contra {p['dir']}")
         tp_ok = False
-        sl_ok = True  # se trata como SL para el calculo de PnL real
+        sl_ok = True
 
     if not (tp_ok or sl_ok):
         return
@@ -1358,16 +1164,11 @@ def _cerrar_posicion(p: dict, pc: float):
         if p not in estado["posiciones"]:
             return
         estado["posiciones"].remove(p)
-
-        # Cancelar orden TP en KuCoin si cerramos por SL o tendencia
         if not tp_ok and p.get("tp_oid"):
-            kc_delete(f"/api/v1/orders/{p['tp_oid']}")
-        # Cancelar orden SL en KuCoin si cerramos por TP
+            bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["tp_oid"]})
         if tp_ok and p.get("sl_oid"):
-            kc_delete(f"/api/v1/orders/{p['sl_oid']}")
-
-        # PnL real siempre desde precio de cierre (robusto para todos los tipos)
-        margen = p.get("margen", estado["capital"] * p.get("capital_pct", 0.5))
+            bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
+        margen = p.get("margen", estado["capital"] * 0.5)
         if p["dir"] == "LONG":
             pnl = round((pc - p["entrada"]) / p["entrada"] * margen, 2)
         else:
@@ -1384,31 +1185,26 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
-    guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc,
-                      pnl, resultado, p.get("confianza_ia", 0))
+    guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl, resultado, p.get("confianza_ia", 0))
     guardar_memoria_trade(p, pc, resultado, pnl)
 
     wr = ops_g / ops_t * 100 if ops_t else 0
     signo = "+" if pnl > 0 else ""
-    tg(f"{'✅' if tp_ok else '🔴'} {p['simbolo']} {resultado} {signo}${pnl:.2f} USDT\n"
+    tg(f"{'OK' if tp_ok else 'SL'} {p['simbolo']} {resultado} {signo}${pnl:.2f} USDT\n"
        f"Capital: ${cap:.2f} | WR: {wr:.0f}%")
 
     recalcular_capital()
 
-    # Re-entrada: si fue TP y el mercado sigue en la misma direccion, re-analiza en 5 min
     if tp_ok:
         def reentrada():
             time.sleep(5 * 60)
-            log.info(f"{p['simbolo']} — re-evaluando tras TP")
             analizar(p["simbolo"])
         threading.Thread(target=reentrada, daemon=True).start()
 
-    # Re-entrada: si se cerro por cambio de tendencia, re-analiza en 2 min en la nueva direccion
     if tendencia_invertida:
         sim = p["simbolo"]
         def reentrada_reversion(s=sim):
             time.sleep(2 * 60)
-            log.info(f"{s} — re-evaluando tras cambio de tendencia")
             analizar(s)
         threading.Thread(target=reentrada_reversion, daemon=True).start()
 
@@ -1417,78 +1213,57 @@ def _cerrar_posicion(p: dict, pc: float):
             estado["circuit_breaker"] = True
         tg(f"CIRCUIT BREAKER — {CB_LIMITE} perdidas seguidas. Envia /reactivar para continuar.")
 
-def _sincronizar_con_kucoin():
-    """Sincroniza posiciones con KuCoin: agrega las que faltan, elimina las cerradas."""
+def _sincronizar_con_bingx():
     try:
-        r = kc_get("/api/v1/positions")
-        pos_data = [p for p in (r.get("data") or []) if float(p.get("currentQty", 0)) != 0] if r.get("code") == "200000" else []
+        r = bx_get("/openApi/swap/v2/user/positions")
+        all_pos  = r.get("data") or []
+        pos_data = [p for p in all_pos
+                    if float(p.get("positionAmt", 0)) != 0 and p.get("symbol") in PARES]
 
-        # Fallback: consultar cada par individualmente (cubre modo aislado)
-        if not pos_data:
-            for s in list(estado.get("pares_activos", [])):
-                try:
-                    rp = kc_get("/api/v1/position", {"symbol": s})
-                    if rp.get("code") == "200000":
-                        pd_ = rp.get("data", {})
-                        if float(pd_.get("currentQty", 0)) != 0:
-                            pos_data.append(pd_)
-                except Exception:
-                    pass
+        simbolos_bx = {p["symbol"] for p in pos_data}
 
-        simbolos_kucoin = {p["symbol"] for p in pos_data}
-
-        # 1) Eliminar posiciones internas que ya no existen en KuCoin
         with lock:
-            cerradas_ext = [p for p in estado["posiciones"] if p["simbolo"] not in simbolos_kucoin]
-            estado["posiciones"] = [p for p in estado["posiciones"] if p["simbolo"] in simbolos_kucoin]
+            cerradas_ext = [p for p in estado["posiciones"] if p["simbolo"] not in simbolos_bx]
+            estado["posiciones"] = [p for p in estado["posiciones"] if p["simbolo"] in simbolos_bx]
         for p in cerradas_ext:
             pc = precio(p["simbolo"]) or p["entrada"]
-            pnl_est = round((p["entrada"] - pc) * p.get("cantidad",1) * obtener_multiplicador(p["simbolo"]), 2) if p["dir"] == "SHORT" \
-                      else round((pc - p["entrada"]) * p.get("cantidad",1) * obtener_multiplicador(p["simbolo"]), 2)
+            margen = p.get("margen", 1) or 1
+            pnl_est = round((p["entrada"] - pc) / p["entrada"] * margen, 2) if p["dir"] == "SHORT" \
+                      else round((pc - p["entrada"]) / p["entrada"] * margen, 2)
             resultado = "ganado" if pnl_est > 0 else "perdido"
             guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl_est, resultado, p.get("confianza_ia", 0))
             log.warning(f"Monitor: {p['simbolo']} cerrada externamente — PnL est. ${pnl_est}")
 
-        # 2) Agregar posiciones de KuCoin que el bot no esta rastreando
         with lock:
             simbolos_bot = {p["simbolo"] for p in estado["posiciones"]}
         for pk in pos_data:
-            simbolo = pk.get("symbol", "")
+            simbolo  = pk.get("symbol", "")
             if simbolo in simbolos_bot:
                 continue
-            qty     = float(pk.get("currentQty", 0))
-            dir_    = "LONG" if qty > 0 else "SHORT"
-            entrada = float(pk.get("avgEntryPrice", 0))
-            margen  = abs(float(pk.get("posMargin", 0)))
-            # Leer SL/TP reales desde las ordenes activas en KuCoin
-            sl = round(entrada * (1 - SL_PCT) if dir_ == "LONG" else entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 + TP_PCT) if dir_ == "LONG" else entrada * (1 - TP_PCT), 6)
-            sl_oid, tp_oid = None, None
-            try:
-                ords = kc_get("/api/v1/stopOrders", {"symbol": simbolo, "status": "active"})
-                for o in (ords.get("data", {}).get("items") or []):
-                    sp = float(o.get("stopPrice", 0))
-                    oid = o.get("clientOid", o.get("id", ""))
-                    stop = o.get("stop", "")
-                    if "sl_" in oid or (stop == "down" and dir_ == "LONG") or (stop == "up" and dir_ == "SHORT"):
-                        sl = sp; sl_oid = oid
-                    elif "tp_" in oid or (stop == "up" and dir_ == "LONG") or (stop == "down" and dir_ == "SHORT"):
-                        tp = sp; tp_oid = oid
-            except Exception:
-                pass
+            pos_side = pk.get("positionSide", "LONG")
+            dir_     = "SHORT" if pos_side == "SHORT" else "LONG"
+            if dir_ == "LONG":
+                log.info(f"Sync: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
+                continue
+            entrada = float(pk.get("avgPrice", 0))
+            amt     = float(pk.get("positionAmt", 0))
+            sl = round(entrada * (1 + SL_PCT), 6)
+            tp = round(entrada * (1 - TP_PCT), 6)
+            lev = estado["apalancamiento"]
+            margen = amt * entrada / lev if lev else 0
             with lock:
                 estado["posiciones"].append({
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
-                    "sl": sl, "tp": tp, "sl_oid": sl_oid, "tp_oid": tp_oid,
-                    "cantidad": abs(int(qty)), "margen": round(margen, 2),
+                    "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
+                    "cantidad": amt, "margen": round(margen, 2),
                     "g_pot": 0, "p_pot": 0, "confianza_ia": 0,
                     "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
-            log.warning(f"Sync: POSICION RECUPERADA {simbolo} {dir_} entrada=${entrada:.4f} sl=${sl} tp=${tp}")
+            log.warning(f"Sync: POSICION RECUPERADA {simbolo} {dir_} entrada=${entrada:.4f}")
             tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}")
 
     except Exception as e:
-        log.error(f"Sincronizacion KuCoin: {e}")
+        log.error(f"Sincronizacion BingX: {e}")
 
 def monitor_posiciones():
     ciclos = 0
@@ -1501,18 +1276,16 @@ def monitor_posiciones():
                 if pc:
                     _cerrar_posicion(p, pc)
                 time.sleep(1)
-            # Cada 2 ciclos sincroniza con KuCoin (detecta cierres y posiciones perdidas)
             ciclos += 1
             if ciclos % 2 == 0:
-                _sincronizar_con_kucoin()
+                _sincronizar_con_bingx()
         except Exception as e:
             log.error(f"Monitor posiciones: {e}")
         time.sleep(30)
 
-# ─── REBOTE CONTRA TENDENCIA ──────────────────────────────────────────────────
+# ─── REBOTE SHORT EN TENDENCIA ALCISTA ────────────────────────────────────────
 
 def filtro_ia_rebote(simbolo, pc, ob) -> dict:
-    """IA evalua si hay rebote alcista valido dentro de tendencia bajista."""
     memoria_contexto = leer_memoria_trades(simbolo)
     for intento in range(3):
         try:
@@ -1523,15 +1296,14 @@ def filtro_ia_rebote(simbolo, pc, ob) -> dict:
                     f"""Eres un trader SMC experto.
 
 Par: {simbolo} | Precio actual: ${pc:.4f}
-Contexto: TENDENCIA DIARIA BAJISTA pero se detecta rebote tecnico alcista.
-Order Block alcista en: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-BOS alcista confirmado en 15min. 2+ velas alcistas de confirmacion.
-Objetivo LONG conservador: +5% | Stop loss: -3%
+Contexto: TENDENCIA DIARIA ALCISTA pero se detecta rebote tecnico bajista.
+Order Block bajista en: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
+BOS bajista confirmado en 15min. 2+ velas bajistas de confirmacion.
+Objetivo SHORT conservador: -5% | Stop loss: +3%
 
 {memoria_contexto}
 
-EVALUA si este rebote tiene probabilidad real de alcanzar +5% antes de ser absorbido por la tendencia bajista.
-Considera: soporte tecnico, fuerza del rebote, historial previo de este par.
+EVALUA si este rebote bajista tiene probabilidad real de alcanzar -5% antes de ser absorbido por la tendencia alcista.
 
 RESPONDE EXACTAMENTE (sin texto extra):
 DECISION: ENTRAR o NO_ENTRAR
@@ -1553,24 +1325,22 @@ RAZON: una linea breve"""}]
                 time.sleep(5)
     return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
 
-
 def abrir_rebote(simbolo, pc, ia):
-    """Abre un LONG de rebote con TP/SL conservadores."""
-    sl  = round(pc * (1 - SL_REBOTE), 6)
-    tp  = round(pc * (1 + TP_REBOTE), 6)
+    sl  = round(pc * (1 + SL_REBOTE), 6)
+    tp  = round(pc * (1 - TP_REBOTE), 6)
     capital_pct = 0.40
     with lock:
         margen = round(estado["capital"] * capital_pct, 2)
     cant = calcular_cantidad(simbolo, pc, capital_pct)
-    log.info(f"{simbolo} [REBOTE] LONG | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 40%")
-    resultado = ejecutar_orden(simbolo, "buy", cant, sl, tp)
+    log.info(f"{simbolo} [REBOTE] SHORT | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 40%")
+    resultado = ejecutar_orden(simbolo, "sell", cant, sl, tp)
     if not resultado:
         return
     sl_oid, tp_oid = resultado
     with lock:
         estado["posiciones"].append({
             "simbolo":      simbolo,
-            "dir":          "LONG",
+            "dir":          "SHORT",
             "entrada":      pc,
             "sl":           sl,
             "tp":           tp,
@@ -1585,170 +1355,40 @@ def abrir_rebote(simbolo, pc, ia):
             "ts":           datetime.now().isoformat(),
         })
         estado["ops_total"] += 1
-    log.info(f"{simbolo} [REBOTE] posicion abierta | ops_total={estado['ops_total']}")
-
-
-# ─── BREAKOUT ─────────────────────────────────────────────────────────────────
-
-def detectar_breakout(simbolo: str, pc: float) -> dict:
-    """
-    Detecta rotura alcista con volumen.
-    Condiciones:
-    - Precio rompe el maximo de las ultimas 10 velas de 15min
-    - Vela de rotura con volumen >= 2x el promedio de las 10 anteriores
-    - MA7 > MA25 en 1H (momentum alcista a corto plazo)
-    Retorna dict con 'valido', 'nivel_rotura', 'vol_ratio', 'ma_ok'
-    """
-    resultado = {"valido": False, "nivel_rotura": 0, "vol_ratio": 0, "ma_ok": False}
-    try:
-        # Velas 15min para detectar rotura de maximo y volumen
-        df15 = velas(simbolo, "15", 20)
-        if df15.empty or len(df15) < 12:
-            return resultado
-        # Maximo de las 10 velas anteriores (excluye la ultima)
-        ventana = df15.iloc[-11:-1]
-        max_previo = ventana["high"].max()
-        ultima = df15.iloc[-1]
-        vol_promedio = ventana["volume"].mean()
-        vol_ultima   = ultima["volume"]
-        vol_ratio    = vol_ultima / vol_promedio if vol_promedio > 0 else 0
-        rotura = ultima["close"] > max_previo and vol_ratio >= 2.0
-
-        # MA7 > MA25 en velas 1H
-        df1h = velas(simbolo, "60", 30)
-        ma_ok = False
-        if not df1h.empty and len(df1h) >= 25:
-            ma7  = df1h["close"].values[-7:].mean()
-            ma25 = df1h["close"].values[-25:].mean()
-            ma_ok = ma7 > ma25
-
-        resultado = {
-            "valido":        rotura and ma_ok,
-            "nivel_rotura":  max_previo,
-            "vol_ratio":     round(vol_ratio, 1),
-            "ma_ok":         ma_ok,
-        }
-    except Exception as e:
-        log.error(f"detectar_breakout {simbolo}: {e}")
-    return resultado
-
-
-def filtro_ia_breakout(simbolo, pc, bk) -> dict:
-    """IA evalua si el breakout tiene continuacion."""
-    memoria_contexto = leer_memoria_trades(simbolo)
-    for intento in range(3):
-        try:
-            r = ai.chat.completions.create(
-                model="deepseek-chat",
-                max_tokens=150,
-                messages=[{"role": "user", "content":
-                    f"""Eres un trader experto en breakouts con volumen.
-
-Par: {simbolo} | Precio actual: ${pc:.4f}
-Nivel de rotura: ${bk['nivel_rotura']:.4f}
-Volumen de rotura: {bk['vol_ratio']}x el promedio (minimo esperado: 2x)
-MA7 > MA25 en 1H: {'SI' if bk['ma_ok'] else 'NO'}
-Objetivo LONG: +5% | Stop loss: -2.5%
-
-{memoria_contexto}
-
-EVALUA si este breakout tiene momentum suficiente para continuar +5% sin pullback profundo.
-Considera: fuerza del volumen, contexto macro, historial previo de este par, probabilidad de fakeout.
-
-RESPONDE EXACTAMENTE (sin texto extra):
-DECISION: ENTRAR o NO_ENTRAR
-CONFIANZA: 0-100
-RAZON: una linea breve"""}]
-            )
-            texto = r.choices[0].message.content.strip()
-            dec, conf, razon = "NO_ENTRAR", 0, "Sin respuesta"
-            for l in texto.split("\n"):
-                if "DECISION:" in l: dec = "ENTRAR" if "ENTRAR" in l else "NO_ENTRAR"
-                elif "CONFIANZA:" in l:
-                    try: conf = int(l.split(":")[1].strip())
-                    except: pass
-                elif "RAZON:" in l: razon = l.split(":", 1)[1].strip()
-            return {"entrar": dec == "ENTRAR" and conf >= 60, "confianza": conf, "razon": razon}
-        except Exception as e:
-            log.error(f"IA breakout intento {intento+1}: {e}")
-            if intento < 2:
-                time.sleep(5)
-    return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
-
-
-def abrir_breakout(simbolo, pc, ia):
-    """Abre un LONG de breakout con TP/SL conservadores."""
-    sl  = round(pc * (1 - SL_BREAKOUT), 6)
-    tp  = round(pc * (1 + TP_BREAKOUT), 6)
-    capital_pct = 0.35
-    with lock:
-        margen = round(estado["capital"] * capital_pct, 2)
-    cant = calcular_cantidad(simbolo, pc, capital_pct)
-    log.info(f"{simbolo} [BREAKOUT] LONG | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 35%")
-    resultado = ejecutar_orden(simbolo, "buy", cant, sl, tp)
-    if not resultado:
-        return
-    sl_oid, tp_oid = resultado
-    with lock:
-        estado["posiciones"].append({
-            "simbolo":      simbolo,
-            "dir":          "LONG",
-            "entrada":      pc,
-            "sl":           sl,
-            "tp":           tp,
-            "sl_oid":       sl_oid,
-            "tp_oid":       tp_oid,
-            "cantidad":     cant,
-            "margen":       margen,
-            "g_pot":        round(margen * TP_BREAKOUT, 2),
-            "p_pot":        round(margen * SL_BREAKOUT, 2),
-            "confianza_ia": ia.get("confianza", 0),
-            "tipo":         "breakout",
-            "ts":           datetime.now().isoformat(),
-        })
-        estado["ops_total"] += 1
-    log.info(f"{simbolo} [BREAKOUT] posicion abierta | ops_total={estado['ops_total']}")
-
+    log.info(f"{simbolo} [REBOTE SHORT] posicion abierta | ops_total={estado['ops_total']}")
 
 # ─── ANALISIS PAR ─────────────────────────────────────────────────────────────
 
 def _trade_ema_rsi(simbolo, t, pc, df_4h):
-    """Nueva estrategia: EMA21 + EMA89 + RSI14 en 4H (mas simple y medible)."""
     if len(df_4h) < 90:
         log.info(f"{simbolo} — sin suficientes velas 4H para EMA89")
         return
 
-    # Calcular EMA21 y EMA89
     ema21 = df_4h["close"].ewm(span=21, adjust=False).mean()
     ema89 = df_4h["close"].ewm(span=89, adjust=False).mean()
     rsi   = calcular_rsi(df_4h)
-
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
 
-    # Filtro tendencia BTC alineada
+    if t == "alcista":
+        log.info(f"{simbolo} — IGNORADO: bot SHORT no opera alcista en flujo principal")
+        return
+
     if not filtro_tendencia_btc(t):
         log.info(f"{simbolo} — RECHAZADO: filtro BTC (par={t}, BTC={estado['tendencia_btc']})")
         return
 
-    # BOT SHORT: solo opera bajista, ignora alcista
-    if t == "alcista":
-        log.info(f"{simbolo} — IGNORADO: bot SHORT no opera alcista")
+    if ema21_v >= ema89_v:
+        log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
         return
-
-    # SHORT: EMA21 < EMA89 + RSI entre 30-55 + precio bajo EMA21
-    if t == "bajista":
-        if ema21_v >= ema89_v:
-            log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
-            return
-        if rsi > 55 or rsi < 30:
-            log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
-            return
-        if pc > ema21_v:
-            log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
-            return
+    if rsi > 55 or rsi < 30:
+        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
+        return
+    if pc > ema21_v:
+        log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
+        return
 
     log.info(f"{simbolo} — EMA+RSI OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
@@ -1758,9 +1398,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO por IA ({ia['confianza']}%): {ia['razon']}")
         return
 
-    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO {'LONG' if t == 'alcista' else 'SHORT'}")
+    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO SHORT")
     abrir(simbolo, t, pc, ia)
-
 
 def analizar(simbolo: str):
     with lock:
@@ -1796,7 +1435,6 @@ def analizar(simbolo: str):
         log.info(f"{simbolo} — RECHAZADO: tendencia lateral")
         return
 
-    # --- Flujo principal: trade EMA21 + EMA89 + RSI14 ---
     _trade_ema_rsi(simbolo, t, pc, df_4h)
 
     with lock:
@@ -1804,29 +1442,11 @@ def analizar(simbolo: str):
     if tiene_pos:
         return
 
-    # --- Flujo secundario: rebote contra tendencia ---
-    _check_rebote(simbolo, t, df_4h, df_1h, pc)
+    if t == "alcista":
+        _check_rebote_short(simbolo, df_4h, df_1h, pc)
 
-    with lock:
-        tiene_pos = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-    if tiene_pos:
-        return
-
-    # --- Flujo terciario: breakout con volumen ---
-    bk = detectar_breakout(simbolo, pc)
-    if bk["valido"]:
-        log.info(f"{simbolo} — BREAKOUT detectado | rotura ${bk['nivel_rotura']:.4f} | vol {bk['vol_ratio']}x | MA OK")
-        ia = filtro_ia_breakout(simbolo, pc, bk)
-        if ia["entrar"]:
-            log.info(f"{simbolo} — IA APRUEBA BREAKOUT {ia['confianza']}% — EJECUTANDO LONG")
-            abrir_breakout(simbolo, pc, ia)
-        else:
-            log.info(f"{simbolo} — BREAKOUT rechazado por IA ({ia['confianza']}%): {ia['razon']}")
-
-
-def _check_rebote(simbolo: str, t: str, df_4h, df_1h, pc: float):
-    """Busca rebote alcista en tendencia bajista (o bajista en alcista)."""
-    dir_rebote = "alcista" if t == "bajista" else "bajista"
+def _check_rebote_short(simbolo: str, df_4h, df_1h, pc: float):
+    dir_rebote = "bajista"
     if not hay_bos(df_4h, dir_rebote, simbolo):
         return
     ob_r = buscar_ob(df_4h, dir_rebote)
@@ -1836,14 +1456,13 @@ def _check_rebote(simbolo: str, t: str, df_4h, df_1h, pc: float):
         return
     if not confirma_1h(df_1h, dir_rebote):
         return
-    log.info(f"{simbolo} — REBOTE {dir_rebote.upper()} detectado en tendencia {t} — consultando IA...")
+    log.info(f"{simbolo} — REBOTE BAJISTA detectado en tendencia alcista — consultando IA...")
     ia = filtro_ia_rebote(simbolo, pc, ob_r)
     if not ia["entrar"]:
-        log.info(f"{simbolo} — REBOTE rechazado por IA ({ia['confianza']}%): {ia['razon']}")
+        log.info(f"{simbolo} — REBOTE SHORT rechazado por IA ({ia['confianza']}%): {ia['razon']}")
         return
-    log.info(f"{simbolo} — IA APRUEBA REBOTE {ia['confianza']}% — EJECUTANDO LONG")
+    log.info(f"{simbolo} — IA APRUEBA REBOTE SHORT {ia['confianza']}% — EJECUTANDO SHORT")
     abrir_rebote(simbolo, pc, ia)
-
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
@@ -1861,17 +1480,13 @@ def _enviar_reporte():
         trump_d   = estado["trump_direccion"]
         t_btc     = estado["tendencia_btc"]
 
-    wr       = ops_g / ops_t * 100 if ops_t else 0
-    g        = cap - cap_ini
-    pct      = g / cap_ini * 100 if cap_ini else 0
-    g_dia    = cap - cap_dia
-    pct_dia  = g_dia / cap_dia * 100 if cap_dia else 0
-    pos_txt  = "\n".join(
-        f"  {p['simbolo']} {p['dir']} @ ${p['entrada']:.4f}" for p in pos
-    ) or "  Ninguna"
+    wr      = ops_g / ops_t * 100 if ops_t else 0
+    g       = cap - cap_ini
+    pct     = g / cap_ini * 100 if cap_ini else 0
+    g_dia   = cap - cap_dia
+    pct_dia = g_dia / cap_dia * 100 if cap_dia else 0
+    pos_txt = "\n".join(f"  {p['simbolo']} {p['dir']} @ ${p['entrada']:.4f}" for p in pos) or "  Ninguna"
     trump_txt = f"\nTrump: {trump_d} — {trump_t[:80]}..." if trump_t else ""
-
-    horario_ok = en_horario_operacion()
 
     tg(f"REPORTE {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
        f"Capital inicial: ${cap_ini:.2f}\n"
@@ -1880,24 +1495,24 @@ def _enviar_reporte():
        f"Total: {'+' if g >= 0 else ''}{g:.2f} ({'+' if pct >= 0 else ''}{pct:.1f}%)\n"
        f"Win Rate: {wr:.0f}% ({ops_g}/{ops_t} ops)\n"
        f"x{lev} | CB: {'ACTIVO' if cb else 'Normal'}\n"
-       f"BTC: {t_btc.upper()} | Horario: {'OK' if horario_ok else 'DESCANSO'}\n\n"
+       f"BTC: {t_btc.upper()} | Horario: {'OK' if en_horario_operacion() else 'DESCANSO'}\n\n"
        f"Posiciones abiertas:\n{pos_txt}"
        f"{trump_txt}\n\n"
-       f"Exchange: KuCoin Futuros")
+       f"Exchange: BingX Perpetual Futures")
 
 # ─── VERIFICACION INICIAL ─────────────────────────────────────────────────────
 
 def verificar_inicio():
     errores = []
 
-    log.info("Verificando KuCoin API...")
-    b = balance_kucoin()
+    log.info("Verificando BingX API...")
+    b = balance_bingx()
     if b == 0:
-        errores.append("KuCoin API: balance=0 (verifica KUCOIN_API_KEY, SECRET y PASSPHRASE)")
+        errores.append("BingX API: balance=0 (verifica BINGX_API_KEY y BINGX_SECRET)")
     else:
-        log.info(f"KuCoin OK — Balance USDT: ${b:.2f}")
-        estado["capital"]           = b
-        estado["capital_inicial"]   = b
+        log.info(f"BingX OK — Balance USDT: ${b:.2f}")
+        estado["capital"]            = b
+        estado["capital_inicial"]    = b
         estado["capital_inicio_dia"] = b
 
     log.info("Verificando DeepSeek API...")
@@ -1913,9 +1528,7 @@ def verificar_inicio():
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         log.info("Verificando Telegram...")
         try:
-            r = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=10
-            )
+            r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=10)
             if r.json().get("ok"):
                 log.info("Telegram OK")
             else:
@@ -1925,7 +1538,7 @@ def verificar_inicio():
     else:
         log.warning("Telegram no configurado — notificaciones desactivadas")
 
-    log.info("Verificando pares en KuCoin Futuros...")
+    log.info("Verificando pares en BingX Perpetual...")
     pares_ok = []
     for s in list(estado["pares_activos"]):
         pc = precio(s)
@@ -1934,75 +1547,41 @@ def verificar_inicio():
             log.info(f"  {s} OK — ${pc:.4f}")
         else:
             log.warning(f"  {s} no disponible — removido")
-
     estado["pares_activos"] = pares_ok
 
-    # Sincronizar posiciones abiertas desde KuCoin (por si el bot se reinicio)
-    log.info("Sincronizando posiciones abiertas desde KuCoin...")
+    log.info("Sincronizando posiciones abiertas desde BingX...")
     try:
-        r = kc_get("/api/v1/positions")
-        pos_kucoin = [p for p in (r.get("data") or []) if float(p.get("currentQty", 0)) != 0] if r.get("code") == "200000" else []
-        # Fallback: consultar cada simbolo individualmente (cubre modo aislado)
-        if not pos_kucoin:
-            log.info("positions bulk vacio — consultando simbolos individualmente...")
-            for s in list(estado["pares_activos"]):
-                try:
-                    rp = kc_get("/api/v1/position", {"symbol": s})
-                    if rp.get("code") == "200000":
-                        pd_ = rp.get("data", {})
-                        if float(pd_.get("currentQty", 0)) != 0:
-                            pos_kucoin.append(pd_)
-                except Exception:
-                    pass
-        if r.get("code") == "200000" or True:
-            for pk in pos_kucoin:
-                simbolo = pk.get("symbol", "")
-                qty     = float(pk.get("currentQty", 0))
-                dir_    = "LONG" if qty > 0 else "SHORT"
-                entrada = float(pk.get("avgEntryPrice", 0))
-                pc_     = float(pk.get("markPrice", entrada))
-                sl_pct_ = SL_PCT
-                tp_pct_ = TP_PCT
-                sl = round(entrada * (1 - sl_pct_) if dir_ == "LONG" else entrada * (1 + sl_pct_), 6)
-                tp = round(entrada * (1 + tp_pct_) if dir_ == "LONG" else entrada * (1 - tp_pct_), 6)
-                margen = abs(float(pk.get("posMargin", 0)))
-                ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-                if not ya_existe:
-                    # Buscar ordenes activas de SL/TP en KuCoin para este simbolo
-                    sl_oid_, tp_oid_ = None, None
-                    try:
-                        ords = kc_get("/api/v1/stopOrders", {"symbol": simbolo, "status": "active"})
-                        for o in (ords.get("data", {}).get("items") or []):
-                            side = o.get("side", "")
-                            stop = o.get("stop", "")
-                            oid  = o.get("clientOid", o.get("id", ""))
-                            if "sl_" in oid:
-                                sl_oid_ = oid
-                            elif "tp_" in oid:
-                                tp_oid_ = oid
-                    except Exception:
-                        pass
-                    estado["posiciones"].append({
-                        "simbolo":      simbolo,
-                        "dir":          dir_,
-                        "entrada":      entrada,
-                        "sl":           sl,
-                        "tp":           tp,
-                        "sl_oid":       sl_oid_,
-                        "tp_oid":       tp_oid_,
-                        "cantidad":     abs(int(qty)),
-                        "margen":       round(margen, 2),
-                        "g_pot":        round(margen * tp_pct_, 2),
-                        "p_pot":        round(margen * sl_pct_, 2),
-                        "confianza_ia": 0,
-                        "tipo":         "recuperada",
-                        "ts":           datetime.now().isoformat(),
-                    })
-                    log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} sl_oid={sl_oid_} tp_oid={tp_oid_}")
-        if pos_kucoin:
-            tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_kucoin)} posicion(es) restauradas al monitor.")
+        r = bx_get("/openApi/swap/v2/user/positions")
+        all_pos = r.get("data") or []
+        pos_bx  = [p for p in all_pos
+                   if float(p.get("positionAmt", 0)) != 0 and p.get("symbol") in PARES]
+        for pk in pos_bx:
+            simbolo  = pk.get("symbol", "")
+            pos_side = pk.get("positionSide", "LONG")
+            dir_     = "SHORT" if pos_side == "SHORT" else "LONG"
+            if dir_ == "LONG":
+                log.info(f"Inicio: ignorando posicion LONG {simbolo}")
+                continue
+            entrada = float(pk.get("avgPrice", 0))
+            amt     = float(pk.get("positionAmt", 0))
+            sl = round(entrada * (1 + SL_PCT), 6)
+            tp = round(entrada * (1 - TP_PCT), 6)
+            lev = estado["apalancamiento"]
+            margen = amt * entrada / lev if lev else 0
+            ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
+            if not ya_existe:
+                estado["posiciones"].append({
+                    "simbolo": simbolo, "dir": dir_, "entrada": entrada,
+                    "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
+                    "cantidad": amt, "margen": round(margen, 2),
+                    "g_pot": round(margen * TP_PCT, 2), "p_pot": round(margen * SL_PCT, 2),
+                    "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
+                })
+                log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
+        if pos_bx:
+            tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bx)} posicion(es).")
         else:
-            log.info("Sin posiciones abiertas en KuCoin al iniciar.")
+            log.info("Sin posiciones abiertas en BingX al iniciar.")
     except Exception as e:
         log.error(f"Sincronizacion posiciones: {e}")
 
@@ -2012,11 +1591,9 @@ def verificar_inicio():
         log.critical(f"Errores de inicio: {errores}")
         raise SystemExit(1)
 
-    tg(f"SMC BOT v13 INICIADO\n\n"
+    tg(f"SMC BOT SHORT BINGX INICIADO\n\n"
        f"Pares: {len(pares_ok)} | Capital: ${estado['capital']:.2f} USDT\n"
        f"x{estado['apalancamiento']} | TP: {TP_PCT*100:.0f}% | SL: {SL_PCT*100:.0f}%\n"
-       f"Capital dinamico: 50/75/100% segun confianza IA\n"
-       f"Trailing stop: activa desde +15%\n"
        f"SL diario: {SL_DIARIO_PCT*100:.0f}% | Max posiciones: {MAX_POSICIONES}\n"
        f"Ciclo: 5-15 min | Horario: 6am-2am Chile\n\n"
        f"{', '.join(pares_ok)}\n\nActivo 24/7 en Railway")
@@ -2031,7 +1608,7 @@ def index():
 
 @app.route("/api/estado")
 def api_estado():
-    bal_real = balance_kucoin()
+    bal_real = balance_bingx()
     if bal_real > 0:
         with lock:
             estado["capital"] = bal_real
@@ -2059,17 +1636,14 @@ def api_estado():
     g_dia   = round(cap - cap_dia, 2)
     pct_dia = round(g_dia / cap_dia * 100, 2) if cap_dia else 0
 
-    # Calcular P&L en tiempo real para cada posicion (con multiplicador real del contrato)
     pos_enriquecidas = []
     for p in pos:
         pc_actual = precio(p["simbolo"]) or p["entrada"]
         entrada   = p["entrada"]
         cantidad  = p.get("cantidad", 1)
         mult      = obtener_multiplicador(p["simbolo"])
-        if p["dir"] == "LONG":
-            pnl = round((pc_actual - entrada) * cantidad * mult, 2)
-        else:
-            pnl = round((entrada - pc_actual) * cantidad * mult, 2)
+        pnl = round((pc_actual - entrada) * cantidad * mult, 2) if p["dir"] == "LONG" \
+              else round((entrada - pc_actual) * cantidad * mult, 2)
         margen = p.get("margen", 1) or 1
         p_enr = dict(p)
         p_enr["precio_actual"] = pc_actual
@@ -2134,39 +1708,17 @@ def api_historial():
 
 @app.route("/api/test_orden")
 def api_test_orden():
-    """Coloca una orden limite SHORT en SOL a precio imposible y la cancela — prueba sin riesgo."""
     try:
-        pc = precio("SOLUSDTM")
-        if not pc:
-            return jsonify({"ok": False, "error": "Sin precio SOL"})
-
-        # Orden LIMIT a precio muy por encima del mercado (nunca se ejecuta)
-        precio_limite = round(pc * 1.50, 3)  # 50% por encima — imposible de tocar
-        oid = f"test_{int(time.time()*1000)}"
-
-        r = kc_post("/api/v1/orders", {
-            "clientOid": oid,
-            "symbol":    "SOLUSDTM",
-            "side":      "sell",
-            "type":      "limit",
-            "size":      1,
-            "price":     str(precio_limite),
-            "leverage":  "10",
-            "postOnly":  True,
-        })
-
-        if r and r.get("code") == "200000":
-            order_id = r.get("data", {}).get("orderId", oid)
-            kc_delete(f"/api/v1/orders/{order_id}")
-            return jsonify({"ok": True, "mensaje": f"Orden colocada y cancelada OK | precio_limite=${precio_limite} | id={order_id}"})
-        else:
-            return jsonify({"ok": False, "error": str(r)})
+        b = balance_bingx()
+        pc_btc = precio("BTC-USDT")
+        if b >= 0 and pc_btc > 0:
+            return jsonify({"ok": True, "mensaje": f"BingX API OK — Balance USDT: ${b:.2f} | BTC: ${pc_btc:.2f}"})
+        return jsonify({"ok": False, "error": "No se pudo obtener balance o precio"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
 @app.route("/api/cerrar_manual", methods=["POST"])
 def api_cerrar_manual():
-    """Cierra una posicion especifica manualmente desde el dashboard."""
     from flask import request as freq
     data    = freq.get_json(silent=True) or {}
     simbolo = data.get("simbolo")
@@ -2178,28 +1730,25 @@ def api_cerrar_manual():
         return jsonify({"ok": False, "error": "posicion no encontrada"})
     p  = pos[0]
     pc = precio(simbolo) or p["entrada"]
-    lado_cierre = "sell" if p["dir"] == "LONG" else "buy"
-    # Cancelar TP y SL pendientes
     for oid_key in ("sl_oid", "tp_oid"):
         oid = p.get(oid_key)
         if oid:
-            kc_delete(f"/api/v1/orders/{oid}")
-    # Orden de mercado para cerrar
-    r = kc_post("/api/v1/orders", {
-        "clientOid":  f"close_{int(time.time()*1000)}",
-        "symbol":     simbolo,
-        "side":       lado_cierre,
-        "type":       "market",
-        "size":       p.get("cantidad", 1),
-        "reduceOnly": True,
+            bx_delete("/openApi/swap/v2/trade/order", {"symbol": simbolo, "clientOrderID": oid})
+    lado_cierre_bx = "BUY" if p["dir"] == "SHORT" else "SELL"
+    bx_post("/openApi/swap/v2/trade/order", {
+        "symbol":       simbolo,
+        "side":         lado_cierre_bx,
+        "positionSide": p["dir"],
+        "type":         "MARKET",
+        "quantity":     str(p.get("cantidad", 1)),
     })
-    # Remover posicion del estado interno inmediatamente
     with lock:
         estado["posiciones"] = [x for x in estado["posiciones"] if x["simbolo"] != simbolo]
-    pnl_estimado = round((p["entrada"] - pc) * p.get("cantidad",1) * obtener_multiplicador(simbolo), 2) if p["dir"] == "SHORT" else round((pc - p["entrada"]) * p.get("cantidad",1) * obtener_multiplicador(simbolo), 2)
+    pnl_estimado = round((p["entrada"] - pc) / p["entrada"] * p.get("margen", 1), 2) if p["dir"] == "SHORT" \
+                   else round((pc - p["entrada"]) / p["entrada"] * p.get("margen", 1), 2)
     resultado = "ganado" if pnl_estimado > 0 else "perdido"
     guardar_historial(simbolo, p["dir"], p["entrada"], pc, pnl_estimado, resultado, p.get("confianza_ia", 0))
-    log.warning(f"{simbolo} — CIERRE MANUAL desde dashboard | pc=${pc:.4f} | PnL est. ${pnl_estimado}")
+    log.warning(f"{simbolo} — CIERRE MANUAL | pc=${pc:.4f} | PnL est. ${pnl_estimado}")
     tg(f"CIERRE MANUAL: {simbolo} {p['dir']} @ ${pc:.4f} | PnL est. ${pnl_estimado}")
     return jsonify({"ok": True, "mensaje": f"{simbolo} cerrado manualmente", "pnl": pnl_estimado})
 
@@ -2240,21 +1789,21 @@ def iniciar_servidor():
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    log.info("SMC Bot KuCoin v2 iniciando...")
+    log.info("SMC Bot SHORT BingX iniciando...")
 
     verificar_inicio()
 
-    threading.Thread(target=telegram_polling,      daemon=True, name="TelegramPoller").start()
-    threading.Thread(target=monitor_posiciones,    daemon=True, name="PosMonitor").start()
-    threading.Thread(target=iniciar_servidor,      daemon=True, name="Dashboard").start()
-    threading.Thread(target=monitor_trump,         daemon=True, name="TrumpMonitor").start()
-    threading.Thread(target=monitor_fed,           daemon=True, name="FedMonitor").start()
+    threading.Thread(target=telegram_polling,         daemon=True, name="TelegramPoller").start()
+    threading.Thread(target=monitor_posiciones,       daemon=True, name="PosMonitor").start()
+    threading.Thread(target=iniciar_servidor,         daemon=True, name="Dashboard").start()
+    threading.Thread(target=monitor_trump,            daemon=True, name="TrumpMonitor").start()
+    threading.Thread(target=monitor_fed,              daemon=True, name="FedMonitor").start()
     threading.Thread(target=actualizar_tendencia_btc, daemon=True, name="BTCTrend").start()
-    threading.Thread(target=reset_sl_diario,       daemon=True, name="SLDiario").start()
-    threading.Thread(target=monitor_sec,           daemon=True, name="SECMonitor").start()
-    threading.Thread(target=monitor_cpi,           daemon=True, name="CPIMonitor").start()
-    threading.Thread(target=monitor_liquidaciones, daemon=True, name="LiqMonitor").start()
-    threading.Thread(target=monitor_ballenas,      daemon=True, name="BallenaMonitor").start()
+    threading.Thread(target=reset_sl_diario,          daemon=True, name="SLDiario").start()
+    threading.Thread(target=monitor_sec,              daemon=True, name="SECMonitor").start()
+    threading.Thread(target=monitor_cpi,              daemon=True, name="CPIMonitor").start()
+    threading.Thread(target=monitor_liquidaciones,    daemon=True, name="LiqMonitor").start()
+    threading.Thread(target=monitor_ballenas,         daemon=True, name="BallenaMonitor").start()
     log.info("Hilos iniciados: TelegramPoller, PosMonitor, Dashboard, TrumpMonitor, FedMonitor, BTCTrend, SLDiario, SECMonitor, CPIMonitor, LiqMonitor, BallenaMonitor")
 
     ultimo_reporte = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2266,17 +1815,15 @@ def main():
 
         log.info(f"CICLO {ciclo} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Chile: {hora_chile()}h")
 
-        # Verificar balance real en KuCoin Futuros cada 5 ciclos
         if ciclo % 5 == 1:
-            bal_real = balance_kucoin()
-            log.info(f"Balance real KuCoin Futuros: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
+            bal_real = balance_bingx()
+            log.info(f"Balance real BingX: ${bal_real:.2f} USDT | Bot estado: ${estado['capital']:.2f}")
             if bal_real > 0:
                 with lock:
                     estado["capital"] = bal_real
 
         recalcular_capital()
 
-        # Verificar horario antes de analizar
         if not en_horario_operacion():
             log.info(f"Fuera de horario ({hora_chile()}h Chile) — esperando 6am, sin operar")
         else:
@@ -2292,7 +1839,6 @@ def main():
             _enviar_reporte()
             ultimo_reporte = ahora
 
-        # Ciclo aleatorio entre 5 y 15 minutos
         espera = random.randint(CICLO_MIN_SEG, CICLO_MAX_SEG)
         log.info(f"CICLO {ciclo} completado — proximo en {espera//60} min | {datetime.now().strftime('%H:%M')}")
         time.sleep(espera)
