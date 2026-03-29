@@ -1458,6 +1458,10 @@ def _sincronizar_con_kucoin():
                 continue
             qty     = float(pk.get("currentQty", 0))
             dir_    = "LONG" if qty > 0 else "SHORT"
+            # Bot SHORT: ignorar posiciones LONG (abiertas por el bot principal)
+            if dir_ == "LONG":
+                log.info(f"Sync: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
+                continue
             entrada = float(pk.get("avgEntryPrice", 0))
             margen  = abs(float(pk.get("posMargin", 0)))
             # Leer SL/TP reales desde las ordenes activas en KuCoin
@@ -1959,6 +1963,10 @@ def verificar_inicio():
                 simbolo = pk.get("symbol", "")
                 qty     = float(pk.get("currentQty", 0))
                 dir_    = "LONG" if qty > 0 else "SHORT"
+                # Bot SHORT: ignorar posiciones LONG
+                if dir_ == "LONG":
+                    log.info(f"Inicio: ignorando posicion LONG {simbolo} (bot SHORT solo monitorea SHORTs)")
+                    continue
                 entrada = float(pk.get("avgEntryPrice", 0))
                 pc_     = float(pk.get("markPrice", entrada))
                 sl_pct_ = SL_PCT
