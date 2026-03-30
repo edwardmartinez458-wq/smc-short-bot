@@ -577,15 +577,18 @@ def monitor_ballenas():
 # ─── BINGX PERPETUAL FUTURES API ─────────────────────────────────────────────
 
 def bx_sign(params: dict) -> str:
-    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    # BingX: ordenar por clave, excluir signature
+    p = {k: v for k, v in params.items() if k != "signature"}
+    qs = "&".join(f"{k}={v}" for k, v in sorted(p.items()))
     return hmac.new(BINGX_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
 def bx_headers() -> dict:
-    return {"X-BX-APIKEY": BINGX_API_KEY}
+    return {"X-BX-APIKEY": BINGX_API_KEY, "Content-Type": "application/json"}
 
 def bx_get(endpoint: str, params: dict = None) -> dict:
     p = params or {}
     p["timestamp"] = int(time.time() * 1000)
+    p["recvWindow"] = 5000
     p["signature"] = bx_sign(p)
     for intento in range(4):
         try:
@@ -606,6 +609,7 @@ def bx_get(endpoint: str, params: dict = None) -> dict:
 def bx_delete(endpoint: str, params: dict = None) -> dict:
     p = params or {}
     p["timestamp"] = int(time.time() * 1000)
+    p["recvWindow"] = 5000
     p["signature"] = bx_sign(p)
     for intento in range(3):
         try:
@@ -624,6 +628,7 @@ def bx_post(endpoint: str, params: dict) -> dict:
         try:
             p = dict(params)
             p["timestamp"] = int(time.time() * 1000)
+            p["recvWindow"] = 5000
             p["signature"] = bx_sign(p)
             r = requests.post(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
             d = r.json()
