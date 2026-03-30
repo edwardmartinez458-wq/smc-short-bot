@@ -43,10 +43,11 @@ BX_QTY_PRECISION = {
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
 APALANCAMIENTO = int(os.getenv("APALANCAMIENTO", "10"))
-TP_PCT         = 0.15
-SL_PCT         = 0.07
-TP_REBOTE      = 0.05
-SL_REBOTE      = 0.03
+TP_PCT         = 0.015  # TP2 fijo 1.5% (salida rapida futuros)
+TP1_PCT        = 0.008  # TP1 fijo 0.8% (asegurar ganancia rapido)
+SL_PCT         = 0.012  # SL fijo 1.2%
+TP_REBOTE      = 0.008  # Rebote: objetivo conservador
+SL_REBOTE      = 0.012  # Rebote: stop ajustado
 MAX_POSICIONES = 3
 CB_LIMITE      = 5
 BASE_URL       = "https://open-api.bingx.com"
@@ -1040,16 +1041,12 @@ def abrir(simbolo, t, pc, ia):
         log.info(f"{simbolo} — abrir() llamado con tendencia {t}, ignorado (solo SHORT)")
         return
 
-    df_4h_sl = velas(simbolo, "240", 30)
-    atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 2, pc * 0.03)
-    sl_pct   = sl_dist / pc
-    tp1_dist = max(atr_val * 1.5, pc * 0.015)
-    tp2_dist = max(atr_val * 3.0, pc * 0.03)
-    sl  = round(pc + sl_dist, 6)
-    tp1 = round(pc - tp1_dist, 6)
-    tp2 = round(pc - tp2_dist, 6)
-    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
+    # SL/TP fijos para futuros — entradas cortas y rapidas (SHORT)
+    sl  = round(pc * (1 + SL_PCT),  6)
+    tp1 = round(pc * (1 - TP1_PCT), 6)
+    tp2 = round(pc * (1 - TP_PCT),  6)
+    sl_pct = SL_PCT
+    log.info(f"{simbolo} — SL ${sl:.4f} (+{SL_PCT*100:.1f}%) | TP1 ${tp1:.4f} (-{TP1_PCT*100:.1f}%) | TP2 ${tp2:.4f} (-{TP_PCT*100:.1f}%)")
 
     confianza = ia.get("confianza", 55)
     if confianza >= 76:
