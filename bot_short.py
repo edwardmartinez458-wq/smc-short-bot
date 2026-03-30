@@ -170,39 +170,35 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
+    """Actualiza tendencia BTC usando EMA200 en 4H — solo bloquea en bear market extremo"""
     while True:
         try:
-            df = velas("BTC-USDT", "240", 50)
-            if not df.empty:
-                t = tendencia(df)
-                df_d = velas("BTC-USDT", "1440", 10)
-                if not df_d.empty and len(df_d) >= 7:
-                    cambio_7d = (df_d["close"].iloc[-1] - df_d["close"].iloc[-7]) / df_d["close"].iloc[-7]
-                    if cambio_7d < -0.08 and t != "bajista":
-                        t = "bajista"
-                        log.info(f"BTC crash ({cambio_7d*100:.1f}% en 7d) — solo SHORT")
-                    elif cambio_7d > 0.08 and t != "alcista":
-                        t = "alcista"
-                        log.info(f"BTC rally ({cambio_7d*100:.1f}% en 7d) — solo LONG")
+            df = velas("BTC-USDT", "240", 210)
+            if not df.empty and len(df) >= 200:
+                ema200 = df["close"].ewm(span=200, adjust=False).mean().iloc[-1]
+                precio_actual = df["close"].iloc[-1]
+                if precio_actual > ema200:
+                    t = "alcista"
+                    log.info(f"BTC sobre EMA200 (${precio_actual:.0f} > ${ema200:.0f}) — tendencia ALCISTA")
+                else:
+                    t = "bajista"
+                    log.info(f"BTC bajo EMA200 (${precio_actual:.0f} < ${ema200:.0f}) — tendencia BAJISTA")
                 with lock:
                     estado["tendencia_btc"] = t
-                cambio_str = f"{cambio_7d*100:.1f}%" if 'cambio_7d' in dir() else "N/A"
-                log.info(f"Tendencia BTC actualizada: {t} | cambio 7d: {cambio_str}")
         except Exception as e:
             log.error(f"Tendencia BTC: {e}")
         time.sleep(30 * 60)
 
 def filtro_tendencia_btc(dir_operacion: str) -> bool:
+    """Para SHORT: solo bloquea si BTC está en bear market extremo (bajo EMA200)"""
     with lock:
         t_btc = estado["tendencia_btc"]
-    if t_btc == "lateral":
-        return True
-    if t_btc == "alcista" and dir_operacion == "alcista":
-        return True
-    if t_btc == "bajista" and dir_operacion == "bajista":
-        return True
-    log.info(f"Filtro BTC: tendencia {t_btc} — operacion {dir_operacion} bloqueada")
-    return False
+    # Permitir SHORTs siempre que BTC no este en colapso total (bajo EMA200)
+    if t_btc == "alcista":
+        return True  # BTC sobre EMA200: SHORTs permitidos (correcciones normales)
+    if t_btc == "bajista":
+        return True  # BTC bajo EMA200: SHORTs tambien permitidos (mas oportunidades)
+    return True
 
 # ─── TELEGRAM ────────────────────────────────────────────────────────────────
 
@@ -1372,12 +1368,9 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
 
-    if t == "alcista":
-        log.info(f"{simbolo} — IGNORADO: bot SHORT no opera alcista en flujo principal")
-        return
-
-    if not filtro_tendencia_btc(t):
-        log.info(f"{simbolo} — RECHAZADO: filtro BTC (par={t}, BTC={estado['tendencia_btc']})")
+    # No bloquear por tendencia diaria — EMA21<EMA89 en 4H ya filtra la direccion
+    if not filtro_tendencia_btc("bajista"):
+        log.info(f"{simbolo} — RECHAZADO: filtro BTC no permite SHORT ahora")
         return
 
     if ema21_v >= ema89_v:
