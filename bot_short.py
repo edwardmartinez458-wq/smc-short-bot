@@ -45,8 +45,6 @@ CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
 APALANCAMIENTO = int(os.getenv("APALANCAMIENTO", "10"))
 TP_PCT         = 0.15
 SL_PCT         = 0.07
-TP_REBOTE      = 0.05
-SL_REBOTE      = 0.03
 MAX_POSICIONES = 3
 CB_LIMITE      = 5
 BASE_URL       = "https://open-api.bingx.com"
@@ -1278,80 +1276,6 @@ def monitor_posiciones():
             log.error(f"Monitor posiciones: {e}")
         time.sleep(30)
 
-# ─── REBOTE SHORT EN TENDENCIA ALCISTA ────────────────────────────────────────
-
-def filtro_ia_rebote(simbolo, pc, ob) -> dict:
-    memoria_contexto = leer_memoria_trades(simbolo)
-    for intento in range(3):
-        try:
-            r = ai.chat.completions.create(
-                model="deepseek-chat",
-                max_tokens=150,
-                messages=[{"role": "user", "content":
-                    f"""Eres un trader SMC experto.
-
-Par: {simbolo} | Precio actual: ${pc:.4f}
-Contexto: TENDENCIA DIARIA ALCISTA pero se detecta rebote tecnico bajista.
-Order Block bajista en: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-BOS bajista confirmado en 15min. 2+ velas bajistas de confirmacion.
-Objetivo SHORT conservador: -5% | Stop loss: +3%
-
-{memoria_contexto}
-
-EVALUA si este rebote bajista tiene probabilidad real de alcanzar -5% antes de ser absorbido por la tendencia alcista.
-
-RESPONDE EXACTAMENTE (sin texto extra):
-DECISION: ENTRAR o NO_ENTRAR
-CONFIANZA: 0-100
-RAZON: una linea breve"""}]
-            )
-            texto = r.choices[0].message.content.strip()
-            dec, conf, razon = "NO_ENTRAR", 0, "Sin respuesta"
-            for l in texto.split("\n"):
-                if "DECISION:" in l: dec = "ENTRAR" if "ENTRAR" in l else "NO_ENTRAR"
-                elif "CONFIANZA:" in l:
-                    try: conf = int(l.split(":")[1].strip())
-                    except: pass
-                elif "RAZON:" in l: razon = l.split(":", 1)[1].strip()
-            return {"entrar": dec == "ENTRAR" and conf >= 60, "confianza": conf, "razon": razon}
-        except Exception as e:
-            log.error(f"IA rebote intento {intento+1}: {e}")
-            if intento < 2:
-                time.sleep(5)
-    return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
-
-def abrir_rebote(simbolo, pc, ia):
-    sl  = round(pc * (1 + SL_REBOTE), 6)
-    tp  = round(pc * (1 - TP_REBOTE), 6)
-    capital_pct = 0.40
-    with lock:
-        margen = round(estado["capital"] * capital_pct, 2)
-    cant = calcular_cantidad(simbolo, pc, capital_pct)
-    log.info(f"{simbolo} [REBOTE] SHORT | entrada ${pc:.4f} | TP ${tp:.4f} | SL ${sl:.4f} | capital 40%")
-    resultado = ejecutar_orden(simbolo, "sell", cant, sl, tp)
-    if not resultado:
-        return
-    sl_oid, tp_oid = resultado
-    with lock:
-        estado["posiciones"].append({
-            "simbolo":      simbolo,
-            "dir":          "SHORT",
-            "entrada":      pc,
-            "sl":           sl,
-            "tp":           tp,
-            "sl_oid":       sl_oid,
-            "tp_oid":       tp_oid,
-            "cantidad":     cant,
-            "margen":       margen,
-            "g_pot":        round(margen * TP_REBOTE, 2),
-            "p_pot":        round(margen * SL_REBOTE, 2),
-            "confianza_ia": ia.get("confianza", 0),
-            "tipo":         "rebote",
-            "ts":           datetime.now().isoformat(),
-        })
-        estado["ops_total"] += 1
-    log.info(f"{simbolo} [REBOTE SHORT] posicion abierta | ops_total={estado['ops_total']}")
-
 # ─── ANALISIS PAR ─────────────────────────────────────────────────────────────
 
 def _trade_ema_rsi(simbolo, t, pc, df_4h):
@@ -1411,8 +1335,7 @@ def analizar(simbolo: str):
 
     df_d  = velas(simbolo, "1440", 50)
     df_4h = velas(simbolo, "240",  200)
-    df_1h = velas(simbolo, "5",    10)
-    if df_d.empty or df_4h.empty or df_1h.empty:
+    if df_d.empty or df_4h.empty:
         log.info(f"{simbolo} — sin datos de velas")
         return
 
@@ -1428,33 +1351,6 @@ def analizar(simbolo: str):
         return
 
     _trade_ema_rsi(simbolo, t, pc, df_4h)
-
-    with lock:
-        tiene_pos = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-    if tiene_pos:
-        return
-
-    if t == "alcista":
-        _check_rebote_short(simbolo, df_4h, df_1h, pc)
-
-def _check_rebote_short(simbolo: str, df_4h, df_1h, pc: float):
-    dir_rebote = "bajista"
-    if not hay_bos(df_4h, dir_rebote, simbolo):
-        return
-    ob_r = buscar_ob(df_4h, dir_rebote)
-    if not ob_r["valido"]:
-        return
-    if not en_ob(pc, ob_r, dir_rebote):
-        return
-    if not confirma_1h(df_1h, dir_rebote):
-        return
-    log.info(f"{simbolo} — REBOTE BAJISTA detectado en tendencia alcista — consultando IA...")
-    ia = filtro_ia_rebote(simbolo, pc, ob_r)
-    if not ia["entrar"]:
-        log.info(f"{simbolo} — REBOTE SHORT rechazado por IA ({ia['confianza']}%): {ia['razon']}")
-        return
-    log.info(f"{simbolo} — IA APRUEBA REBOTE SHORT {ia['confianza']}% — EJECUTANDO SHORT")
-    abrir_rebote(simbolo, pc, ia)
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
