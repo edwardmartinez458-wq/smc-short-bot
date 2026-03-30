@@ -1200,6 +1200,9 @@ def _cerrar_posicion(p: dict, pc: float):
     if tp_ok:
         def reentrada():
             time.sleep(5 * 60)
+            with lock:
+                if estado["circuit_breaker"]:
+                    return
             analizar(p["simbolo"])
         threading.Thread(target=reentrada, daemon=True).start()
 
@@ -1207,6 +1210,9 @@ def _cerrar_posicion(p: dict, pc: float):
         sim = p["simbolo"]
         def reentrada_reversion(s=sim):
             time.sleep(2 * 60)
+            with lock:
+                if estado["circuit_breaker"]:
+                    return
             analizar(s)
         threading.Thread(target=reentrada_reversion, daemon=True).start()
 
