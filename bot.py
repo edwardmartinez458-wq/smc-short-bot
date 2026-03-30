@@ -1559,23 +1559,77 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
     ia["vol_ratio_entrada"] = round(vol_ratio, 2)
     ia["hora_entrada"]      = hora_chile()
 
+    # Comunicación cruzada: si LONG bot tiene este par abierto con ganancia → cerrar antes de entrar SHORT
+    pos_long = long_bot_posicion_info(simbolo)
+    if pos_long:
+        entrada_long = pos_long.get("entrada", pc)
+        pnl_pct = (pc - entrada_long) / entrada_long if entrada_long > 0 else 0
+        if pnl_pct > 0:
+            log.info(f"{simbolo} — LONG abierto con +{pnl_pct*100:.2f}% ganancia — cerrando antes de SHORT")
+            cerrado = cerrar_long_bot(simbolo)
+            if cerrado:
+                tg(f"🔄 COORDINACION: SHORT detectó caída en {simbolo}\nLONG cerrado con +{pnl_pct*100:.2f}% ganancia salvada\nAbriendo SHORT...")
+            else:
+                log.warning(f"{simbolo} — No se pudo cerrar LONG bot, cancelando SHORT por seguridad")
+                return
+        else:
+            log.info(f"{simbolo} — LONG abierto pero en perdida ({pnl_pct*100:.2f}%), SHORT bloqueado")
+            return
+
     log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO SHORT")
     abrir(simbolo, "bajista", pc, ia)
 
+LONG_BOT_URL = "https://bot-production-61f1.up.railway.app"
+MAPA_BX_KC   = {"BTC-USDT": "XBTUSDTM", "ETH-USDT": "ETHUSDTM", "SOL-USDT": "SOLUSDTM", "XRP-USDT": "XRPUSDTM"}
+
 def long_bot_tiene_posicion(simbolo: str) -> bool:
     """Consulta al bot LONG si tiene posicion abierta en el mismo par."""
-    # Mapeo BingX → KuCoin
-    mapa = {"BTC-USDT": "XBTUSDTM", "ETH-USDT": "ETHUSDTM", "SOL-USDT": "SOLUSDTM", "XRP-USDT": "XRPUSDTM"}
-    simbolo_long = mapa.get(simbolo)
+    simbolo_long = MAPA_BX_KC.get(simbolo)
     if not simbolo_long:
         return False
     try:
-        r = requests.get("https://bot-production-61f1.up.railway.app/api/estado", timeout=5)
+        r = requests.get(f"{LONG_BOT_URL}/api/estado", timeout=5)
         d = r.json()
         pos = d.get("posiciones", [])
         return any(p.get("simbolo") == simbolo_long for p in pos)
     except Exception:
         return False
+
+def long_bot_posicion_info(simbolo: str) -> dict:
+    """Retorna info de la posicion LONG abierta: entrada, pnl_pct. {} si no hay."""
+    simbolo_long = MAPA_BX_KC.get(simbolo)
+    if not simbolo_long:
+        return {}
+    try:
+        r = requests.get(f"{LONG_BOT_URL}/api/estado", timeout=5)
+        d = r.json()
+        for p in d.get("posiciones", []):
+            if p.get("simbolo") == simbolo_long:
+                return p
+    except Exception:
+        pass
+    return {}
+
+def cerrar_long_bot(simbolo: str) -> bool:
+    """Envia señal al bot LONG para cerrar posicion del par (cuando SHORT detecta caida fuerte)."""
+    simbolo_long = MAPA_BX_KC.get(simbolo)
+    if not simbolo_long:
+        return False
+    try:
+        r = requests.post(
+            f"{LONG_BOT_URL}/api/cerrar_manual",
+            json={"simbolo": simbolo_long},
+            timeout=8
+        )
+        d = r.json()
+        if d.get("ok"):
+            log.info(f"{simbolo} — LONG bot cerró {simbolo_long} por señal SHORT ✅")
+            return True
+        else:
+            log.warning(f"{simbolo} — LONG bot no pudo cerrar {simbolo_long}: {d.get('error')}")
+    except Exception as e:
+        log.error(f"{simbolo} — Error cerrando LONG bot: {e}")
+    return False
 
 def analizar(simbolo: str):
     with lock:
