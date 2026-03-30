@@ -170,19 +170,19 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
-    """Actualiza tendencia BTC usando EMA200 en 4H — solo bloquea en bear market extremo"""
+    """Actualiza tendencia BTC usando EMA50 en 4H"""
     while True:
         try:
-            df = velas("BTC-USDT", "240", 210)
-            if not df.empty and len(df) >= 200:
-                ema200 = df["close"].ewm(span=200, adjust=False).mean().iloc[-1]
+            df = velas("BTC-USDT", "240", 60)
+            if not df.empty and len(df) >= 50:
+                ema50 = df["close"].ewm(span=50, adjust=False).mean().iloc[-1]
                 precio_actual = df["close"].iloc[-1]
-                if precio_actual > ema200:
+                if precio_actual > ema50:
                     t = "alcista"
-                    log.info(f"BTC sobre EMA200 (${precio_actual:.0f} > ${ema200:.0f}) — tendencia ALCISTA")
+                    log.info(f"BTC sobre EMA50 (${precio_actual:.0f} > ${ema50:.0f}) — tendencia ALCISTA")
                 else:
                     t = "bajista"
-                    log.info(f"BTC bajo EMA200 (${precio_actual:.0f} < ${ema200:.0f}) — tendencia BAJISTA")
+                    log.info(f"BTC bajo EMA50 (${precio_actual:.0f} < ${ema50:.0f}) — tendencia BAJISTA")
                 with lock:
                     estado["tendencia_btc"] = t
         except Exception as e:
@@ -757,9 +757,10 @@ def recalcular_capital():
     cap_ini = estado["capital_inicial"]
     caida   = (cap_ini - estado["capital"]) / cap_ini if cap_ini > 0 else 0
     if caida >= 0.40:
+        if not estado["circuit_breaker"]:
+            tg(f"CIRCUIT BREAKER PERMANENTE\nCapital cayo {caida*100:.0f}% del inicial (${estado['capital']:.2f}).\nBot detenido. Usa /reactivar para continuar.")
+            log.critical(f"Capital caido {caida*100:.0f}% — CB permanente")
         estado["circuit_breaker"] = True
-        tg(f"CIRCUIT BREAKER PERMANENTE\nCapital cayo {caida*100:.0f}% del inicial (${estado['capital']:.2f}).\nBot detenido. Usa /reactivar para continuar.")
-        log.critical(f"Capital caido {caida*100:.0f}% — CB permanente")
     elif caida >= 0.20 and estado["apalancamiento"] > 10:
         estado["apalancamiento"] = 10
         log.warning("Apalancamiento reducido a x10 por caida de capital")
