@@ -4,101 +4,136 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SMC Bot — Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #080810;
-    --surface: #0e0e1a;
-    --border: #1a1a2e;
-    --accent: #00ff9d;
-    --red: #ff3b5c;
-    --warn: #ffcc00;
-    --blue: #4ea8ff;
-    --text: #e8e8f0;
-    --muted: #44445a;
-    --card: #0f0f1c;
+    --bg:       #080d18;
+    --surface:  #0d1425;
+    --card:     #101827;
+    --card2:    #0e1622;
+    --border:   rgba(255,255,255,0.07);
+    --border2:  rgba(255,255,255,0.04);
+    --green:    #34d399;
+    --green-bg: rgba(52,211,153,0.08);
+    --red:      #fb7185;
+    --red-bg:   rgba(251,113,133,0.08);
+    --warn:     #fbbf24;
+    --warn-bg:  rgba(251,191,36,0.08);
+    --blue:     #60a5fa;
+    --blue-bg:  rgba(96,165,250,0.08);
+    --text:     #e2e8f0;
+    --sub:      #94a3b8;
+    --muted:    #475569;
+    --mono:     'JetBrains Mono', monospace;
   }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'Syne', sans-serif;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
     min-height: 100vh;
   }
 
-  /* HEADER */
+  /* ── HEADER ───────────────────────────────────── */
   header {
     position: sticky; top: 0; z-index: 100;
-    background: rgba(8,8,16,0.95);
-    backdrop-filter: blur(20px);
+    background: rgba(8,13,24,0.9);
+    backdrop-filter: blur(24px);
     border-bottom: 1px solid var(--border);
-    padding: 0 1.25rem;
+    padding: 0 1.5rem;
     display: flex; align-items: center; justify-content: space-between;
-    height: 56px;
+    height: 58px;
   }
   .logo {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.85rem; font-weight: 700;
-    letter-spacing: 0.15em; color: var(--accent);
-    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono);
+    font-size: 0.8rem; font-weight: 700;
+    letter-spacing: 0.12em; color: var(--green);
+    display: flex; align-items: center; gap: 10px;
   }
-  .pulse {
+  .pulse-dot {
     width: 8px; height: 8px;
-    background: var(--accent); border-radius: 50%;
-    animation: pulse 2s infinite;
+    background: var(--green); border-radius: 50%;
+    animation: pulse 2.4s ease-in-out infinite;
   }
   @keyframes pulse {
-    0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(0,255,157,0.4); }
-    50% { opacity:0.6; box-shadow: 0 0 0 6px rgba(0,255,157,0); }
+    0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(52,211,153,0.35); }
+    50%      { opacity:0.7; box-shadow: 0 0 0 7px rgba(52,211,153,0); }
   }
   .header-right { display:flex; align-items:center; gap:1rem; }
   .badge {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.65rem; padding: 3px 10px;
-    border-radius: 20px; border: 1px solid var(--accent);
-    color: var(--accent); letter-spacing: 0.1em;
+    font-family: var(--mono);
+    font-size: 0.6rem; font-weight: 700;
+    padding: 4px 12px; border-radius: 999px;
+    background: var(--green-bg);
+    border: 1px solid rgba(52,211,153,0.3);
+    color: var(--green); letter-spacing: 0.1em;
   }
-  .badge.offline { border-color: var(--red); color: var(--red); }
-  #last-update { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: var(--muted); }
+  .badge.offline {
+    background: var(--red-bg);
+    border-color: rgba(251,113,133,0.3);
+    color: var(--red);
+  }
+  #last-update {
+    font-family: var(--mono);
+    font-size: 0.62rem; color: var(--muted);
+  }
 
-  /* MAIN */
-  main { max-width: 1400px; margin: 0 auto; padding: 1.25rem; }
+  /* ── MAIN ─────────────────────────────────────── */
+  main { max-width: 1360px; margin: 0 auto; padding: 1.5rem; }
 
-  /* CONTROLS */
+  /* ── PAUSED BANNER ────────────────────────────── */
+  #paused-banner {
+    display: none;
+    background: var(--warn-bg);
+    border: 1px solid rgba(251,191,36,0.25);
+    border-radius: 10px;
+    padding: 0.65rem 1.1rem;
+    font-size: 0.78rem; font-weight: 600;
+    color: var(--warn);
+    margin-bottom: 1.25rem; text-align: center;
+    letter-spacing: 0.03em;
+  }
+
+  /* ── CONTROLS ─────────────────────────────────── */
   .controls { display:flex; gap:0.6rem; margin-bottom:1.25rem; flex-wrap:wrap; }
   .btn {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.08em;
-    padding: 9px 18px; border-radius: 8px; border: 1px solid;
-    cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.75rem; font-weight: 600;
+    padding: 9px 20px; border-radius: 9px;
+    border: 1px solid; cursor: pointer;
+    transition: all 0.18s ease;
+    letter-spacing: 0.02em;
   }
-  .btn-pause  { background:transparent; border-color:var(--warn); color:var(--warn); }
-  .btn-pause:hover  { background:var(--warn); color:var(--bg); }
-  .btn-resume { background:transparent; border-color:var(--accent); color:var(--accent); }
-  .btn-resume:hover { background:var(--accent); color:var(--bg); }
-  .btn-report { background:transparent; border-color:var(--muted); color:var(--muted); }
-  .btn-report:hover { border-color:var(--text); color:var(--text); }
+  .btn-pause  { background:transparent; border-color:rgba(251,191,36,0.4); color:var(--warn); }
+  .btn-pause:hover  { background:var(--warn-bg); border-color:var(--warn); }
+  .btn-resume { background:transparent; border-color:rgba(52,211,153,0.4); color:var(--green); }
+  .btn-resume:hover { background:var(--green-bg); border-color:var(--green); }
+  .btn-report { background:transparent; border-color:var(--border); color:var(--sub); }
+  .btn-report:hover { border-color:rgba(255,255,255,0.2); color:var(--text); }
 
-  /* MONITORS */
-  .monitors { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.25rem; }
+  /* ── MONITORS ─────────────────────────────────── */
+  .monitors { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.5rem; }
   .chip {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.58rem; padding: 5px 12px;
-    border-radius: 20px; border: 1px solid rgba(0,255,157,0.25);
-    color: var(--accent); display:flex; align-items:center; gap:5px;
+    font-family: var(--mono);
+    font-size: 0.6rem; font-weight: 500;
+    padding: 5px 12px; border-radius: 999px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    color: var(--sub);
+    display: flex; align-items: center; gap: 6px;
+    transition: border-color 0.2s;
   }
-  .chip .dot { width:5px; height:5px; border-radius:50%; background:var(--accent); animation:pulse 2s infinite; }
-
-  /* PAUSED BANNER */
-  #paused-banner {
-    display:none; background:rgba(255,204,0,0.07);
-    border:1px solid var(--warn); border-radius:8px;
-    padding:0.6rem 1rem; font-family:'Space Mono',monospace;
-    font-size:0.7rem; color:var(--warn);
-    margin-bottom:1.25rem; text-align:center;
+  .chip:hover { border-color: rgba(52,211,153,0.3); color: var(--text); }
+  .chip .dot {
+    width: 5px; height: 5px;
+    border-radius: 50%; background: var(--green);
+    animation: pulse 2.4s ease-in-out infinite;
   }
 
-  /* STATS GRID */
+  /* ── STATS GRID ───────────────────────────────── */
   .stats-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -106,153 +141,238 @@
     margin-bottom: 1.25rem;
   }
   @media(min-width:600px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-  @media(min-width:900px) { .stats-grid { grid-template-columns: repeat(6, 1fr); } }
+  @media(min-width:960px) { .stats-grid { grid-template-columns: repeat(6, 1fr); } }
 
   .stat {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem;
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
     position: relative; overflow: hidden;
+    transition: border-color 0.2s;
   }
-  .stat::before {
-    content:''; position:absolute; top:0; left:0; right:0; height:2px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    opacity: 0.4;
-  }
-  .stat.red::before  { background: linear-gradient(90deg, transparent, var(--red), transparent); }
-  .stat.blue::before { background: linear-gradient(90deg, transparent, var(--blue), transparent); }
-  .stat.warn::before { background: linear-gradient(90deg, transparent, var(--warn), transparent); }
+  .stat:hover { border-color: rgba(255,255,255,0.12); }
+  .stat-accent { border-top: 2px solid var(--green); }
+  .stat-red    { border-top: 2px solid var(--red); }
+  .stat-blue   { border-top: 2px solid var(--blue); }
+  .stat-warn   { border-top: 2px solid var(--warn); }
+
   .stat-label {
-    font-family:'Space Mono',monospace; font-size:0.55rem;
-    letter-spacing:0.12em; color:var(--muted);
-    text-transform:uppercase; margin-bottom:0.4rem;
+    font-size: 0.65rem; font-weight: 600;
+    letter-spacing: 0.07em; color: var(--muted);
+    text-transform: uppercase; margin-bottom: 0.5rem;
   }
   .stat-val {
-    font-size: 1.5rem; font-weight:800; line-height:1; color:var(--text);
+    font-family: var(--mono);
+    font-size: 1.45rem; font-weight: 700;
+    line-height: 1; color: var(--text);
   }
-  .stat-val.green { color: var(--accent); }
+  .stat-val.green { color: var(--green); }
   .stat-val.red   { color: var(--red); }
   .stat-val.blue  { color: var(--blue); }
   .stat-val.warn  { color: var(--warn); }
-  .stat-sub { font-family:'Space Mono',monospace; font-size:0.58rem; color:var(--muted); margin-top:0.3rem; }
 
-  /* GRID 2 COL */
+  .stat-sub {
+    font-family: var(--mono);
+    font-size: 0.6rem; color: var(--muted);
+    margin-top: 0.35rem;
+  }
+  .stat-sub.green { color: var(--green); }
+  .stat-sub.red   { color: var(--red); }
+
+  /* Win rate bar */
+  .wr-bar {
+    height: 4px; background: rgba(255,255,255,0.06);
+    border-radius: 2px; margin-top: 0.6rem; overflow: hidden;
+  }
+  .wr-fill {
+    height: 100%; background: var(--green);
+    border-radius: 2px; transition: width 0.6s ease;
+  }
+
+  /* ── 2-COL GRID ───────────────────────────────── */
   .grid-2 {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 1rem;
-    margin-bottom: 1rem;
+    gap: 0.875rem;
+    margin-bottom: 0.875rem;
   }
   @media(min-width:800px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
 
-  /* CARD */
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
-  .card-header {
-    padding:0.75rem 1rem; border-bottom:1px solid var(--border);
-    display:flex; align-items:center; justify-content:space-between;
-  }
-  .card-title { font-family:'Space Mono',monospace; font-size:0.62rem; letter-spacing:0.12em; color:var(--muted); text-transform:uppercase; }
-  .card-body { padding:1rem; }
-
-  /* POSITIONS CARDS */
-  .pos-cards { display:flex; flex-direction:column; gap:0.75rem; padding:0.75rem; }
-  .pos-card {
-    background: #12121f;
-    border-radius: 10px;
+  /* ── CARD ─────────────────────────────────────── */
+  .card {
+    background: var(--card);
     border: 1px solid var(--border);
-    padding: 0.9rem 1rem;
-    position: relative;
+    border-radius: 12px;
     overflow: hidden;
   }
-  .pos-card.long-card  { border-left: 3px solid var(--accent); }
+  .card-header {
+    padding: 0.8rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-title {
+    font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 0.06em; color: var(--sub);
+    text-transform: uppercase;
+  }
+  .card-badge {
+    font-family: var(--mono);
+    font-size: 0.6rem; color: var(--muted);
+    background: rgba(255,255,255,0.04);
+    padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border2);
+  }
+
+  /* ── POSITION CARDS ───────────────────────────── */
+  .pos-cards { display:flex; flex-direction:column; gap:0.75rem; padding:0.875rem; }
+
+  .pos-card {
+    background: var(--card2);
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    padding: 1rem;
+    position: relative; overflow: hidden;
+  }
+  .pos-card.long-card  { border-left: 3px solid var(--green); }
   .pos-card.short-card { border-left: 3px solid var(--red); }
+
   .pos-card-top {
-    display:flex; align-items:center; justify-content:space-between;
-    margin-bottom:0.6rem;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 0.65rem;
   }
   .pos-par {
-    font-family:'Space Mono',monospace; font-size:0.85rem;
-    font-weight:700; color:var(--text);
+    font-family: var(--mono);
+    font-size: 0.9rem; font-weight: 700; color: var(--text);
   }
   .pos-side {
-    font-family:'Space Mono',monospace; font-size:0.65rem;
-    font-weight:700; padding:3px 10px; border-radius:20px;
+    font-size: 0.65rem; font-weight: 700;
+    padding: 3px 10px; border-radius: 999px;
   }
-  .pos-side.long  { background:rgba(0,255,157,0.12); color:var(--accent); }
-  .pos-side.short { background:rgba(255,59,92,0.12);  color:var(--red); }
-  .pos-lev { font-family:'Space Mono',monospace; font-size:0.58rem; color:var(--muted); margin-left:6px; }
+  .pos-side.long  { background: var(--green-bg); color: var(--green); }
+  .pos-side.short { background: var(--red-bg);   color: var(--red); }
+  .pos-lev {
+    font-family: var(--mono);
+    font-size: 0.58rem; color: var(--muted); margin-left: 5px;
+  }
+  .pos-ia {
+    font-family: var(--mono);
+    font-size: 0.6rem; color: var(--muted);
+  }
+
   .pos-pnl {
-    font-family:'Space Mono',monospace; font-size:1.4rem; font-weight:700;
-    margin-bottom:0.4rem;
+    font-family: var(--mono);
+    font-size: 1.4rem; font-weight: 700;
+    margin-bottom: 0.5rem;
+    display: flex; align-items: baseline; gap: 6px;
   }
-  .pos-pnl.pos { color:var(--accent); }
-  .pos-pnl.neg { color:var(--red); }
+  .pos-pnl .pnl-pct {
+    font-size: 0.75rem; font-weight: 500; opacity: 0.75;
+  }
+  .pos-pnl.pos { color: var(--green); }
+  .pos-pnl.neg { color: var(--red); }
+
   .pos-details {
-    display:grid; grid-template-columns:1fr 1fr;
-    gap:0.3rem 0; font-family:'Space Mono',monospace; font-size:0.6rem;
-    color:var(--muted); margin-bottom:0.75rem;
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 0;
+    font-size: 0.65rem; color: var(--muted);
+    margin-bottom: 0.875rem;
   }
-  .pos-details span { color:var(--text); }
+  .pos-details .val {
+    font-family: var(--mono);
+    color: var(--text);
+  }
+
   .btn-cerrar {
-    width:100%; font-family:'Space Mono',monospace;
-    font-size:0.65rem; letter-spacing:0.08em;
-    padding:8px; border-radius:7px;
-    border:1px solid var(--red); color:var(--red);
-    background:transparent; cursor:pointer;
-    transition:all 0.15s; text-transform:uppercase;
+    width: 100%;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.7rem; font-weight: 600;
+    padding: 8px; border-radius: 8px;
+    border: 1px solid rgba(251,113,133,0.3);
+    color: var(--red);
+    background: var(--red-bg);
+    cursor: pointer; transition: all 0.18s;
   }
-  .btn-cerrar:hover { background:var(--red); color:#fff; }
-  .long  { color:var(--accent); font-weight:700; }
-  .short { color:var(--red);    font-weight:700; }
-  .pos   { color:var(--accent); }
-  .neg   { color:var(--red); }
-  .empty { font-family:'Space Mono',monospace; font-size:0.7rem; color:var(--muted); text-align:center; padding:1.5rem; }
+  .btn-cerrar:hover { background: rgba(251,113,133,0.18); border-color: var(--red); }
 
-  /* LOGS */
+  .pos { color: var(--green); font-weight: 600; }
+  .neg { color: var(--red);   font-weight: 600; }
+  .long  { color: var(--green); font-weight: 600; }
+  .short { color: var(--red);   font-weight: 600; }
+
+  .empty {
+    font-size: 0.72rem; color: var(--muted);
+    text-align: center; padding: 2rem 1rem;
+    font-style: italic;
+  }
+
+  /* ── LOGS ─────────────────────────────────────── */
   .log-list {
-    max-height: 260px; overflow-y:auto;
-    font-family:'Space Mono',monospace; font-size:0.63rem; line-height:1.9;
+    max-height: 270px; overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 0.62rem; line-height: 2;
+    padding: 0.625rem 0.875rem;
   }
-  .log-list::-webkit-scrollbar { width:3px; }
-  .log-list::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
-  .log-row { display:flex; gap:0.6rem; padding:0.1rem 0; border-bottom:1px solid rgba(26,26,46,0.3); }
-  .log-time { color:var(--muted); flex-shrink:0; }
-  .log-msg       { color:#7eb8ff; }
-  .log-msg.warn  { color:var(--warn); }
-  .log-msg.error { color:var(--red); }
-  .log-msg.ok    { color:var(--accent); }
+  .log-list::-webkit-scrollbar { width: 3px; }
+  .log-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
 
-  /* HISTORIAL */
+  .log-row {
+    display: flex; gap: 0.75rem;
+    padding: 0.05rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.025);
+  }
+  .log-time  { color: var(--muted); flex-shrink: 0; }
+  .log-msg         { color: #90b8e0; }
+  .log-msg.warn    { color: var(--warn); }
+  .log-msg.error   { color: var(--red); }
+  .log-msg.ok      { color: var(--green); }
+
+  /* ── HISTORIAL ────────────────────────────────── */
   .hist-item {
-    display:flex; align-items:center; justify-content:space-between;
-    padding:0.55rem 0; border-bottom:1px solid rgba(26,26,46,0.4);
-    font-family:'Space Mono',monospace; font-size:0.68rem;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border2);
+    font-size: 0.72rem;
   }
-  .hist-item:last-child { border-bottom:none; }
-  .hist-par { color:var(--text); font-weight:700; }
-  .hist-date { color:var(--muted); font-size:0.55rem; margin-top:2px; }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-par { font-weight: 600; color: var(--text); }
+  .hist-meta { font-size: 0.6rem; color: var(--muted); margin-top: 2px; }
+  .hist-pnl  { font-family: var(--mono); font-size: 0.72rem; font-weight: 600; }
 
-  /* WIN/LOSS BAR */
-  .wr-bar { height:6px; background:var(--border); border-radius:3px; margin-top:0.5rem; overflow:hidden; }
-  .wr-fill { height:100%; background:var(--accent); border-radius:3px; transition:width 0.5s; }
+  /* ── TRUMP FEED ───────────────────────────────── */
+  .trump-post {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--border2);
+    font-size: 0.75rem; line-height: 1.55; color: var(--sub);
+  }
+  .trump-post:last-child { border-bottom: none; }
+  .trump-date {
+    font-family: var(--mono);
+    font-size: 0.58rem; color: var(--muted); margin-top: 4px;
+  }
 
-  /* NOTIFICATION */
+  /* ── NOTIFICATION ─────────────────────────────── */
   #notif {
-    position:fixed; bottom:1.5rem; right:1.5rem;
-    background:var(--card); border:1px solid var(--accent);
-    border-radius:8px; padding:0.6rem 1rem;
-    font-family:'Space Mono',monospace; font-size:0.68rem; color:var(--accent);
-    z-index:999; opacity:0; transform:translateY(8px);
-    transition:all 0.3s; pointer-events:none;
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: var(--card);
+    border: 1px solid var(--green);
+    border-radius: 10px;
+    padding: 0.65rem 1.1rem;
+    font-size: 0.72rem; font-weight: 500; color: var(--green);
+    z-index: 999;
+    opacity: 0; transform: translateY(10px);
+    transition: all 0.28s ease;
+    pointer-events: none;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   }
-  #notif.show { opacity:1; transform:translateY(0); }
+  #notif.show { opacity: 1; transform: translateY(0); }
 
-  /* MOBILE TWEAKS */
+  /* ── MOBILE ───────────────────────────────────── */
   @media(max-width:480px) {
-    main { padding:0.75rem; }
-    .stat-val { font-size:1.2rem; }
-    header { padding:0 0.75rem; }
+    main { padding: 0.875rem; }
+    .stat-val { font-size: 1.2rem; }
+    header { padding: 0 0.875rem; }
+    .controls .btn { padding: 8px 14px; font-size: 0.7rem; }
   }
 </style>
 </head>
@@ -260,7 +380,7 @@
 
 <header>
   <div class="logo">
-    <div class="pulse"></div>
+    <div class="pulse-dot"></div>
     SMC_BOT
   </div>
   <div class="header-right">
@@ -270,30 +390,30 @@
 </header>
 
 <main>
-  <div id="paused-banner">⚠ BOT EN PAUSA</div>
+  <div id="paused-banner">⚠ Bot en pausa — las operaciones están detenidas</div>
 
   <!-- CONTROLS -->
   <div class="controls">
     <button class="btn btn-pause"   onclick="pausar()">⏸ Pausar</button>
     <button class="btn btn-resume"  onclick="reactivar()">▶ Reactivar</button>
-    <button class="btn btn-report"  onclick="reporte()">📊 Reporte</button>
+    <button class="btn btn-report"  onclick="reporte()">↗ Reporte</button>
   </div>
 
   <!-- MONITORS -->
   <div class="monitors">
-    <div class="chip"><div class="dot"></div>SMC MARKET</div>
-    <div class="chip"><div class="dot"></div>TRUMP</div>
-    <div class="chip"><div class="dot"></div>FED</div>
+    <div class="chip"><div class="dot"></div>SMC Market</div>
+    <div class="chip"><div class="dot"></div>Trump</div>
+    <div class="chip"><div class="dot"></div>Fed</div>
     <div class="chip"><div class="dot"></div>SEC</div>
     <div class="chip"><div class="dot"></div>CPI</div>
-    <div class="chip"><div class="dot"></div>BALLENAS</div>
-    <div class="chip"><div class="dot"></div>LIQUIDACIONES</div>
-    <div class="chip"><div class="dot"></div>KUCOIN API</div>
+    <div class="chip"><div class="dot"></div>Ballenas</div>
+    <div class="chip"><div class="dot"></div>Liquidaciones</div>
+    <div class="chip"><div class="dot"></div>KuCoin API</div>
   </div>
 
   <!-- STATS -->
   <div class="stats-grid">
-    <div class="stat">
+    <div class="stat stat-accent">
       <div class="stat-label">Balance</div>
       <div class="stat-val green" id="capital">$—</div>
       <div class="stat-sub">USDT disponible</div>
@@ -303,23 +423,23 @@
       <div class="stat-val" id="pnl-total">$—</div>
       <div class="stat-sub" id="pnl-pct">—</div>
     </div>
-    <div class="stat">
+    <div class="stat stat-blue">
       <div class="stat-label">Posiciones</div>
       <div class="stat-val blue" id="num-pos">—</div>
       <div class="stat-sub">Abiertas ahora</div>
     </div>
-    <div class="stat">
+    <div class="stat stat-accent">
       <div class="stat-label">Ganadas</div>
       <div class="stat-val green" id="wins">—</div>
       <div class="stat-sub" id="wr-label">Win rate</div>
-      <div class="stat-sub green" id="pnl-ganadas" style="color:var(--accent);margin-top:2px">+$0.00</div>
+      <div class="stat-sub green" id="pnl-ganadas">+$0.00</div>
       <div class="wr-bar"><div class="wr-fill" id="wr-fill" style="width:0%"></div></div>
     </div>
-    <div class="stat red">
+    <div class="stat stat-red">
       <div class="stat-label">Perdidas</div>
       <div class="stat-val red" id="losses">—</div>
       <div class="stat-sub" id="pnl-hist">P&L total</div>
-      <div class="stat-sub" id="pnl-perdidas" style="color:var(--red);margin-top:2px">-$0.00</div>
+      <div class="stat-sub red" id="pnl-perdidas">-$0.00</div>
     </div>
     <div class="stat">
       <div class="stat-label">Ciclo</div>
@@ -333,7 +453,7 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Mis futuros</span>
-        <span class="card-title" id="pos-count">0</span>
+        <span class="card-badge" id="pos-count">0</span>
       </div>
       <div id="pos-cards" class="pos-cards">
         <div class="empty">Sin posiciones abiertas</div>
@@ -343,11 +463,9 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Log en vivo</span>
-        <span class="card-title" id="log-count">0</span>
+        <span class="card-badge" id="log-count">0</span>
       </div>
-      <div class="card-body" style="padding:0.6rem 0.75rem">
-        <div class="log-list" id="log-list"></div>
-      </div>
+      <div class="log-list" id="log-list"></div>
     </div>
   </div>
 
@@ -356,19 +474,19 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Historial de operaciones</span>
-        <span class="card-title" id="hist-count">0</span>
+        <span class="card-badge" id="hist-count">0</span>
       </div>
-      <div class="card-body" style="padding:0 1rem">
-        <div id="hist-list"><div class="empty">Sin historial</div></div>
+      <div style="padding:0 1rem" id="hist-list">
+        <div class="empty">Sin historial</div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-header">
         <span class="card-title">Trump Monitor</span>
-        <span class="card-title" id="trump-count">0 posts</span>
+        <span class="card-badge" id="trump-count">0 posts</span>
       </div>
-      <div style="max-height:220px; overflow-y:auto" id="trump-feed">
+      <div style="max-height:240px; overflow-y:auto" id="trump-feed">
         <div class="empty">Sin posts recientes</div>
       </div>
     </div>
@@ -383,8 +501,8 @@
   function showNotif(msg, color) {
     const n = document.getElementById('notif');
     n.textContent = msg;
-    n.style.borderColor = color || 'var(--accent)';
-    n.style.color = color || 'var(--accent)';
+    n.style.borderColor = color || 'var(--green)';
+    n.style.color = color || 'var(--green)';
     n.classList.add('show');
     setTimeout(() => n.classList.remove('show'), 3000);
   }
@@ -412,11 +530,11 @@
         document.getElementById('paused-banner').style.display = 'none';
       }
 
-      // Posiciones
       const pos = d.posiciones || [];
       document.getElementById('num-pos').textContent = pos.length;
       document.getElementById('pos-count').textContent = pos.length;
       const posCards = document.getElementById('pos-cards');
+
       if (!pos.length) {
         posCards.innerHTML = '<div class="empty">Sin posiciones abiertas</div>';
         document.getElementById('pnl-total').textContent = '$0.00';
@@ -429,8 +547,7 @@
           const isLong = (p.dir||p.lado||'').toUpperCase() === 'LONG';
           const pnlCls = pnl >= 0 ? 'pos' : 'neg';
           const pnlSign = pnl >= 0 ? '+' : '';
-          const pnlPct = p.entrada ? (pnl / (p.margen||1) * 100).toFixed(2) : '0.00';
-          const sideLbl = isLong ? 'Largo' : 'Corto';
+          const sideLbl = isLong ? 'Long' : 'Short';
           return `
           <div class="pos-card ${isLong ? 'long-card' : 'short-card'}">
             <div class="pos-card-top">
@@ -439,19 +556,23 @@
                 <span class="pos-side ${isLong?'long':'short'}">${sideLbl}</span>
                 <span class="pos-lev">10x</span>
               </div>
-              <span style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted)">IA ${p.confianza_ia||'—'}%</span>
+              <span class="pos-ia">IA ${p.confianza_ia||'—'}%</span>
             </div>
-            <div class="pos-pnl ${pnlCls}">${pnlSign}$${fmt(pnl)} <span style="font-size:0.75rem">${pnlSign}${fmt(p.pnl_pct||0,2)}%</span></div>
+            <div class="pos-pnl ${pnlCls}">
+              ${pnlSign}$${fmt(pnl)}
+              <span class="pnl-pct">${pnlSign}${fmt(p.pnl_pct||0,2)}%</span>
+            </div>
             <div class="pos-details">
-              <div>Entrada</div><div><span>$${fmt(p.entrada,4)}</span></div>
-              <div>${p.tp1 ? (p.tp1_hit ? 'TP1 ✅' : 'TP1') : 'TP'}</div><div><span style="color:var(--accent)">$${fmt(p.tp1||p.tp,4)}</span></div>
-              ${p.tp2 ? `<div>${p.tp1_hit ? 'TP2 🎯' : 'TP2'}</div><div><span style="color:#f7931a">$${fmt(p.tp2,4)}</span></div>` : ''}
-              <div>SL</div><div><span style="color:var(--red)">${p.tp1_hit ? '🔒 BE ' : ''}$${fmt(p.sl,4)}</span></div>
-              <div>Margen</div><div><span>$${fmt(p.margen)}</span></div>
+              <div>Entrada</div><div class="val">$${fmt(p.entrada,4)}</div>
+              <div>${p.tp1 ? (p.tp1_hit ? 'TP1 ✅' : 'TP1') : 'TP'}</div><div class="val" style="color:var(--green)">$${fmt(p.tp1||p.tp,4)}</div>
+              ${p.tp2 ? `<div>${p.tp1_hit ? 'TP2 🎯' : 'TP2'}</div><div class="val" style="color:#f7931a">$${fmt(p.tp2,4)}</div>` : ''}
+              <div>SL</div><div class="val" style="color:var(--red)">${p.tp1_hit ? '🔒 BE ' : ''}$${fmt(p.sl,4)}</div>
+              <div>Margen</div><div class="val">$${fmt(p.margen)}</div>
             </div>
-            <button class="btn-cerrar" onclick="cerrarManual('${p.simbolo}')">⏹ Cerrar ${p.simbolo}</button>
+            <button class="btn-cerrar" onclick="cerrarManual('${p.simbolo}')">Cerrar ${p.simbolo}</button>
           </div>`;
         }).join('');
+
         const pnlEl = document.getElementById('pnl-total');
         pnlEl.textContent = (pnlTotal>=0?'+':'') + '$' + fmt(pnlTotal);
         pnlEl.className = 'stat-val ' + (pnlTotal>=0?'green':'red');
@@ -498,16 +619,16 @@
 
       if (!hist.length) { el.innerHTML = '<div class="empty">Sin historial</div>'; return; }
 
-      const wins   = hist.filter(h => parseFloat(h.pnl||0) > 0).length;
-      const losses = hist.filter(h => parseFloat(h.pnl||0) < 0).length;
-      const total  = hist.length;
-      const wr     = total ? Math.round(wins/total*100) : 0;
-      const pnlSum     = hist.reduce((a,h) => a + parseFloat(h.pnl||0), 0);
-      const pnlGanadas = hist.filter(h => parseFloat(h.pnl||0) > 0).reduce((a,h) => a + parseFloat(h.pnl||0), 0);
+      const wins      = hist.filter(h => parseFloat(h.pnl||0) > 0).length;
+      const losses    = hist.filter(h => parseFloat(h.pnl||0) < 0).length;
+      const total     = hist.length;
+      const wr        = total ? Math.round(wins/total*100) : 0;
+      const pnlSum      = hist.reduce((a,h) => a + parseFloat(h.pnl||0), 0);
+      const pnlGanadas  = hist.filter(h => parseFloat(h.pnl||0) > 0).reduce((a,h) => a + parseFloat(h.pnl||0), 0);
       const pnlPerdidas = hist.filter(h => parseFloat(h.pnl||0) < 0).reduce((a,h) => a + parseFloat(h.pnl||0), 0);
 
-      document.getElementById('wins').textContent    = wins;
-      document.getElementById('losses').textContent  = losses;
+      document.getElementById('wins').textContent   = wins;
+      document.getElementById('losses').textContent = losses;
       document.getElementById('wr-label').textContent = `Win rate ${wr}%`;
       document.getElementById('wr-fill').style.width  = wr + '%';
       document.getElementById('pnl-hist').textContent = (pnlSum>=0?'+':'') + '$' + fmt(pnlSum);
@@ -520,9 +641,9 @@
         return `<div class="hist-item">
           <div>
             <div class="hist-par">${h.simbolo||'—'} <span style="color:var(--muted);font-weight:400">${(h.lado||'').toUpperCase()}</span></div>
-            <div class="hist-date">${h.fecha||h.tiempo||'—'} · ${h.motivo||''}</div>
+            <div class="hist-meta">${h.fecha||h.tiempo||'—'}${h.motivo ? ' · ' + h.motivo : ''}</div>
           </div>
-          <div class="${cls}" style="font-family:'Space Mono',monospace;font-size:0.72rem">${pnl>=0?'+':''}$${fmt(pnl)}</div>
+          <div class="hist-pnl ${cls}">${pnl>=0?'+':''}$${fmt(pnl)}</div>
         </div>`;
       }).join('');
     } catch(e) {}
@@ -538,9 +659,9 @@
       const feed = document.getElementById('trump-feed');
       if (!posts.length) { feed.innerHTML = '<div class="empty">Sin posts recientes</div>'; return; }
       feed.innerHTML = posts.slice(-10).reverse().map(p => `
-        <div style="padding:0.65rem 1rem;border-bottom:1px solid var(--border);font-size:0.78rem;line-height:1.5">
+        <div class="trump-post">
           <div>${p.texto||p.text||p}</div>
-          <div style="font-family:'Space Mono',monospace;font-size:0.58rem;color:var(--muted);margin-top:3px">${p.fecha||p.time||''}</div>
+          <div class="trump-date">${p.fecha||p.time||''}</div>
         </div>
       `).join('');
     } catch(e) {}
@@ -559,13 +680,13 @@
     try {
       const r = await fetch(BASE + '/api/reactivar', { method:'POST' });
       const d = await r.json();
-      showNotif(d.mensaje||'Bot reactivado', 'var(--accent)');
+      showNotif(d.mensaje||'Bot reactivado', 'var(--green)');
       cargarEstado();
     } catch(e) { showNotif('Error al reactivar', 'var(--red)'); }
   }
 
   async function reporte() {
-    showNotif('Enviando reporte a Telegram...', 'var(--accent)');
+    showNotif('Enviando reporte a Telegram...', 'var(--green)');
   }
 
   async function cerrarManual(simbolo) {
@@ -578,7 +699,7 @@
       });
       const d = await r.json();
       if (d.ok) {
-        showNotif(`✓ ${simbolo} cerrado`, 'var(--accent)');
+        showNotif(`✓ ${simbolo} cerrado`, 'var(--green)');
         cargarEstado();
       } else {
         showNotif(`Error: ${d.error}`, 'var(--red)');
