@@ -1401,6 +1401,21 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
     log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO SHORT")
     abrir(simbolo, "bajista", pc, ia)
 
+def long_bot_tiene_posicion(simbolo: str) -> bool:
+    """Consulta al bot LONG si tiene posicion abierta en el mismo par."""
+    # Mapeo BingX → KuCoin
+    mapa = {"BTC-USDT": "XBTUSDTM", "ETH-USDT": "ETHUSDTM", "SOL-USDT": "SOLUSDTM", "XRP-USDT": "XRPUSDTM"}
+    simbolo_long = mapa.get(simbolo)
+    if not simbolo_long:
+        return False
+    try:
+        r = requests.get("https://bot-production-61f1.up.railway.app/api/estado", timeout=5)
+        d = r.json()
+        pos = d.get("posiciones", [])
+        return any(p.get("simbolo") == simbolo_long for p in pos)
+    except Exception:
+        return False
+
 def analizar(simbolo: str):
     with lock:
         if estado["circuit_breaker"]:
@@ -1412,6 +1427,10 @@ def analizar(simbolo: str):
         if any(p["simbolo"] == simbolo for p in estado["posiciones"]):
             log.info(f"{simbolo} — bloqueado: ya tiene posicion abierta")
             return
+
+    if long_bot_tiene_posicion(simbolo):
+        log.info(f"{simbolo} — bloqueado: bot LONG tiene posicion abierta en este par")
+        return
 
     if not en_horario_operacion():
         log.info(f"{simbolo} — fuera de horario ({hora_chile()}h Chile)")
