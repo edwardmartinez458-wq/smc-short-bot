@@ -1590,7 +1590,14 @@ def verificar_inicio():
 
 app = Flask(__name__, static_folder=".")
 
-@app.route("/")
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
+@app.route("/", methods=["GET","OPTIONS"])
 def index():
     return send_from_directory(".", "dashboard.html")
 
