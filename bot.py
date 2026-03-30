@@ -1663,17 +1663,17 @@ def analizar(simbolo: str):
         log.info(f"{simbolo} — sin precio")
         return
 
-    log.info(f"{simbolo} — precio: ${pc:.4f}")
+    t = tendencia(df_d)
+    log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
+    if t == "lateral":
+        log.info(f"{simbolo} — RECHAZADO: tendencia lateral")
+        return
 
     _trade_ema_rsi(simbolo, pc, df_4h)
 
-    with lock:
-        tiene_pos = any(p["simbolo"] == simbolo for p in estado["posiciones"])
-    if tiene_pos:
-        return
-
-    if t == "alcista":
-        _check_rebote_short(simbolo, df_4h, df_1h, pc)
+    # Rebote contra tendencia DESACTIVADO
+    # if t == "alcista":
+    #     _check_rebote_short(simbolo, df_4h, df_1h, pc)
 
 def _check_rebote_short(simbolo: str, df_4h, df_1h, pc: float):
     dir_rebote = "bajista"
