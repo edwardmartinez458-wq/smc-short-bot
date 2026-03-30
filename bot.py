@@ -576,23 +576,22 @@ def monitor_ballenas():
 
 # ─── BINGX PERPETUAL FUTURES API ─────────────────────────────────────────────
 
-def bx_sign(params: dict) -> str:
-    # BingX: ordenar por clave, excluir signature
-    p = {k: v for k, v in params.items() if k != "signature"}
-    qs = "&".join(f"{k}={v}" for k, v in sorted(p.items()))
-    return hmac.new(BINGX_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
+def bx_build_url(endpoint: str, params: dict) -> str:
+    """Construye URL con firma segun formato oficial BingX."""
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    sig = hmac.new(BINGX_SECRET.encode("utf-8"), qs.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{BASE_URL}{endpoint}?{qs}&signature={sig}"
 
 def bx_headers() -> dict:
-    return {"X-BX-APIKEY": BINGX_API_KEY, "Content-Type": "application/json"}
+    return {"X-BX-APIKEY": BINGX_API_KEY}
 
 def bx_get(endpoint: str, params: dict = None) -> dict:
     p = params or {}
     p["timestamp"] = int(time.time() * 1000)
-    p["recvWindow"] = 5000
-    p["signature"] = bx_sign(p)
     for intento in range(4):
         try:
-            r = requests.get(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
+            url = bx_build_url(endpoint, p)
+            r = requests.get(url, headers=bx_headers(), timeout=10)
             d = r.json()
             if d.get("code") == 0:
                 return {"code": "200000", "data": d.get("data")}
@@ -609,11 +608,10 @@ def bx_get(endpoint: str, params: dict = None) -> dict:
 def bx_delete(endpoint: str, params: dict = None) -> dict:
     p = params or {}
     p["timestamp"] = int(time.time() * 1000)
-    p["recvWindow"] = 5000
-    p["signature"] = bx_sign(p)
     for intento in range(3):
         try:
-            r = requests.delete(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
+            url = bx_build_url(endpoint, p)
+            r = requests.delete(url, headers=bx_headers(), timeout=10)
             d = r.json()
             if d.get("code") == 0:
                 return {"code": "200000", "data": d.get("data")}
@@ -628,9 +626,8 @@ def bx_post(endpoint: str, params: dict) -> dict:
         try:
             p = dict(params)
             p["timestamp"] = int(time.time() * 1000)
-            p["recvWindow"] = 5000
-            p["signature"] = bx_sign(p)
-            r = requests.post(f"{BASE_URL}{endpoint}", params=p, headers=bx_headers(), timeout=10)
+            url = bx_build_url(endpoint, p)
+            r = requests.post(url, headers=bx_headers(), timeout=10)
             d = r.json()
             if d.get("code") == 0:
                 return {"code": "200000", "data": d.get("data")}
