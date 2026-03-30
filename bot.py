@@ -1827,7 +1827,11 @@ def main():
 
         recalcular_capital()
 
-        if not en_horario_operacion():
+        with lock:
+            pausado = estado["circuit_breaker"]
+        if pausado:
+            log.info("Bot pausado — ciclo sin operar")
+        elif not en_horario_operacion():
             log.info(f"Fuera de horario ({hora_chile()}h Chile) — esperando 6am, sin operar")
         else:
             for s in estado["pares_activos"]:
