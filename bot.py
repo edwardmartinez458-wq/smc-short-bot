@@ -1391,10 +1391,6 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
         return
 
-    # Filtro 3: RSI entre 30-55 (momentum bajista, sin sobreventa extrema)
-    if rsi < 30 or rsi > 55:
-        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
-        return
 
     log.info(f"{simbolo} — EMAs OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
