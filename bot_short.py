@@ -990,7 +990,7 @@ RAZON: una linea breve"""}]
                     except: pass
                 elif "RAZON:" in l: razon = l.split(":", 1)[1].strip()
             log.info(f"{simbolo} — Fear&Greed: {fear_greed} | Funding: {funding}")
-            return {"entrar": dec == "ENTRAR" and conf >= 55, "confianza": conf, "razon": razon}
+            return {"entrar": dec == "ENTRAR" and conf >= 50, "confianza": conf, "razon": razon}
         except Exception as e:
             log.error(f"IA intento {intento+1}: {e}")
             if intento < 2:
@@ -1017,13 +1017,11 @@ def abrir(simbolo, t, pc, ia):
     tp2 = round(pc - tp2_dist, 6)
     log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
 
-    confianza = ia.get("confianza", 55)
-    if confianza >= 70:
-        capital_pct = 1.00
-    elif confianza >= 61:
-        capital_pct = 0.65
+    confianza = ia.get("confianza", 50)
+    if confianza >= 65:
+        capital_pct = 1.00  # 100% — alta confianza
     else:
-        capital_pct = 0.35
+        capital_pct = 0.50  # 50% — confianza media
     riesgo_usdt = estado["capital"] * capital_pct * sl_pct
     log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% | riesgo max ${riesgo_usdt:.2f}")
 
