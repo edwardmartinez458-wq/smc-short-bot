@@ -906,6 +906,37 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     trs = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1])) for i in range(1, len(c))]
     return sum(trs[-periodo:]) / periodo
 
+def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
+    """Calcula el ADX (Average Directional Index). >25 = tendencia fuerte."""
+    if len(df) < periodo * 2: return 0.0
+    h = df["high"].values
+    l = df["low"].values
+    c = df["close"].values
+    tr_list, pdm_list, ndm_list = [], [], []
+    for i in range(1, len(c)):
+        tr  = max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+        pdm = max(h[i]-h[i-1], 0) if (h[i]-h[i-1]) > (l[i-1]-l[i]) else 0
+        ndm = max(l[i-1]-l[i], 0) if (l[i-1]-l[i]) > (h[i]-h[i-1]) else 0
+        tr_list.append(tr); pdm_list.append(pdm); ndm_list.append(ndm)
+    def wilder(lst, n):
+        result, s = [], sum(lst[:n])
+        result.append(s)
+        for v in lst[n:]:
+            s = s - s/n + v
+            result.append(s)
+        return result
+    atr  = wilder(tr_list, periodo)
+    apdi = wilder(pdm_list, periodo)
+    andi = wilder(ndm_list, periodo)
+    dx_list = []
+    for i in range(len(atr)):
+        pdi = 100 * apdi[i] / atr[i] if atr[i] > 0 else 0
+        ndi = 100 * andi[i] / atr[i] if atr[i] > 0 else 0
+        dx  = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) > 0 else 0
+        dx_list.append(dx)
+    if len(dx_list) < periodo: return 0.0
+    return sum(dx_list[-periodo:]) / periodo
+
 def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> float:
     if len(df) < periodo + 1: return 50.0
     c = df["close"].values
@@ -1373,11 +1404,10 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
 
     ema21 = df_4h["close"].ewm(span=21, adjust=False).mean()
     ema89 = df_4h["close"].ewm(span=89, adjust=False).mean()
-    rsi   = calcular_rsi(df_4h)
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
-    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
+    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f}")
 
     # Filtro 1: EMA21 < EMA89 (tendencia bajista 4H)
     if ema21_v >= ema89_v:
@@ -1389,8 +1419,44 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
         return
 
+    # Filtro 3: ADX > 25 (tendencia real, evita entradas en mercado lateral)
+    adx = calcular_adx(df_4h)
+    if adx < 25:
+        log.info(f"{simbolo} — RECHAZADO: ADX={adx:.1f} < 25 (mercado lateral)")
+        return
 
-    log.info(f"{simbolo} — EMAs OK — consultando IA...")
+    # Filtro 4: Volumen de confirmación (última vela > promedio últimas 20)
+    vol_ultimo   = df_4h["volume"].iloc[-1]
+    vol_promedio = df_4h["volume"].iloc[-21:-1].mean()
+    if vol_ultimo < vol_promedio:
+        log.info(f"{simbolo} — RECHAZADO: volumen bajo (vol={vol_ultimo:.0f} < avg={vol_promedio:.0f})")
+        return
+
+    # Filtro 5: Sin movimiento explosivo en BTC (>5% en última vela 4H)
+    if simbolo != "BTC-USDT":
+        df_btc = velas("BTC-USDT", "240", 5)
+        if not df_btc.empty:
+            ultima_btc = df_btc.iloc[-1]
+            cambio_btc = abs(ultima_btc["close"] - ultima_btc["open"]) / ultima_btc["open"] * 100
+            if cambio_btc > 5:
+                log.info(f"{simbolo} — RECHAZADO: BTC movimiento explosivo {cambio_btc:.1f}% en 4H")
+                return
+
+    # Filtro 6: Funding Rate (evitar SHORT si muy negativo = riesgo de short squeeze)
+    try:
+        r_fr = requests.get(f"{BASE_URL}/openApi/swap/v2/quote/fundingRate",
+                            params={"symbol": simbolo}, timeout=5)
+        d_fr = r_fr.json()
+        if d_fr.get("code") == 0:
+            fr = float(d_fr["data"].get("fundingRate", 0)) * 100
+            if fr < -0.1:
+                log.info(f"{simbolo} — RECHAZADO: Funding Rate muy negativo ({fr:.4f}%) — riesgo short squeeze")
+                return
+            log.info(f"{simbolo} — Funding Rate: {fr:.4f}% OK")
+    except Exception as e:
+        log.warning(f"{simbolo} — no se pudo obtener funding rate: {e}")
+
+    log.info(f"{simbolo} — EMAs+ADX+Vol+BTC+FR OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
     ia = filtro_ia(simbolo, "bajista", pc, ob_ctx, 0)
 
