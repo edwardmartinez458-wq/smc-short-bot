@@ -1375,10 +1375,11 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
 
     ema21 = df_4h["close"].ewm(span=21, adjust=False).mean()
     ema89 = df_4h["close"].ewm(span=89, adjust=False).mean()
+    rsi   = calcular_rsi(df_4h)
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
-    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f}")
+    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
 
     # Filtro 1: EMA21 < EMA89 (tendencia bajista 4H)
     if ema21_v >= ema89_v:
@@ -1388,6 +1389,11 @@ def _trade_ema_rsi(simbolo, pc, df_4h):
     # Filtro 2: precio bajo EMA21 (zona de venta)
     if pc > ema21_v:
         log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
+        return
+
+    # Filtro 3: RSI entre 30-55 (momentum bajista, sin sobreventa extrema)
+    if rsi < 30 or rsi > 55:
+        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (30-55)")
         return
 
     log.info(f"{simbolo} — EMAs OK — consultando IA...")
