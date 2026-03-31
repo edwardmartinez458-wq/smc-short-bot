@@ -827,14 +827,14 @@ def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
 # ─── SMC ──────────────────────────────────────────────────────────────────────
 
 def tendencia(df: pd.DataFrame, pc: float = None) -> str:
-    """Tendencia diaria usando MA20 con umbral 2%.
+    """Tendencia diaria usando MA20 con umbral 0.8%.
     Usa precio actual (pc) si se provee, para evitar depender del cierre de ayer."""
     if len(df) < 20: return "lateral"
     c    = df["close"].values
     ma20 = c[-20:].mean()
     ref  = pc if pc else c[-1]
-    if ref > ma20 * 1.02: return "alcista"
-    if ref < ma20 * 0.98: return "bajista"
+    if ref > ma20 * 1.008: return "alcista"
+    if ref < ma20 * 0.992: return "bajista"
     return "lateral"
 
 def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
@@ -1051,7 +1051,7 @@ def abrir(simbolo, t, pc, ia):
     tp2_oid = f"tp2{int(time.time()*1000)}"
     log.info(f"{simbolo} — TP2 ${tp2:.4f} configurado (monitoreo por software)")
 
-    g_pot = riesgo_usdt * (TP_PCT / SL_PCT)
+    g_pot = riesgo_usdt * (tp2_dist / sl_dist)
     p_pot = riesgo_usdt
 
     with lock:
@@ -1262,8 +1262,12 @@ def _sincronizar_con_bingx():
                 continue
             entrada = float(pk.get("avgPrice", 0))
             amt     = float(pk.get("positionAmt", 0))
-            sl = round(entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 - TP_PCT), 6)
+            _df4h_s = velas(simbolo, "240", 30)
+            _atr_s  = calcular_atr(_df4h_s) if not _df4h_s.empty else 0
+            _sl_d_s = max(_atr_s * 2, entrada * 0.03)
+            _tp_d_s = max(_atr_s * 3.0, entrada * 0.03)
+            sl = round(entrada + _sl_d_s, 6)
+            tp = round(entrada - _tp_d_s, 6)
             lev = estado["apalancamiento"]
             margen = amt * entrada / lev if lev else 0
             with lock:
@@ -1316,8 +1320,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     if ema21_v >= ema89_v:
         log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
         return
-    if rsi > 60 or rsi < 25:
-        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (25-60)")
+    if rsi > 65 or rsi < 20:
+        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (20-65)")
         return
     if pc > ema21_v:
         log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
@@ -1481,8 +1485,12 @@ def verificar_inicio():
                 continue
             entrada = float(pk.get("avgPrice", 0))
             amt     = float(pk.get("positionAmt", 0))
-            sl = round(entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 - TP_PCT), 6)
+            _df4h_i = velas(simbolo, "240", 30)
+            _atr_i  = calcular_atr(_df4h_i) if not _df4h_i.empty else 0
+            _sl_d_i = max(_atr_i * 2, entrada * 0.03)
+            _tp_d_i = max(_atr_i * 3.0, entrada * 0.03)
+            sl = round(entrada + _sl_d_i, 6)
+            tp = round(entrada - _tp_d_i, 6)
             lev = estado["apalancamiento"]
             margen = amt * entrada / lev if lev else 0
             ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
@@ -1491,7 +1499,7 @@ def verificar_inicio():
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
                     "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
                     "cantidad": amt, "margen": round(margen, 2),
-                    "g_pot": round(margen * TP_PCT, 2), "p_pot": round(margen * SL_PCT, 2),
+                    "g_pot": round(margen * (_tp_d_i / entrada), 2), "p_pot": round(margen * (_sl_d_i / entrada), 2),
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
