@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from openai import OpenAI
 from flask import Flask, jsonify, send_from_directory
+from flask_cors import CORS
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -1532,6 +1533,7 @@ def verificar_inicio():
 # ─── DASHBOARD API ────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder=".")
+CORS(app)
 
 @app.route("/")
 def index():
