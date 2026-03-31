@@ -1378,8 +1378,8 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
-    if t == "lateral":
-        log.info(f"{simbolo} — RECHAZADO: tendencia lateral")
+    if t != "bajista":
+        log.info(f"{simbolo} — RECHAZADO: bot SHORT solo opera con tendencia bajista (actual: {t})")
         return
 
     _trade_ema_rsi(simbolo, t, pc, df_4h)
