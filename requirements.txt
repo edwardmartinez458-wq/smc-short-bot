@@ -1,6 +1,7 @@
 requests
 openai
 flask
+flask-cors
 pandas
 numpy
 python-telegram-bot==13.15
