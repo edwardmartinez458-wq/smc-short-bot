@@ -105,7 +105,7 @@ lock = threading.Lock()
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
-def hora_chile() -> int:
+def hora_venezuela() -> int:
     from datetime import timezone, timedelta
     tz_fija = timezone(timedelta(hours=-4))
     return datetime.now(tz_fija).hour
@@ -270,10 +270,10 @@ def manejar_comando(texto: str):
         else:
             tg("No hay posts recientes de Trump detectados.")
     elif texto == "/horario":
-        h = hora_chile()
+        h = hora_venezuela()
         operando = en_horario_operacion()
-        tg(f"Hora Chile: {h}:00\n"
-           f"Horario de operacion: 6am - 2am\n"
+        tg(f"Hora Venezuela: {h}:00\n"
+           f"Horario: 24/7 sin restriccion\n"
            f"Estado: {'OPERANDO' if operando else 'PAUSADO (hora de descanso)'}")
 
 # ─── TRUMP MONITOR ────────────────────────────────────────────────────────────
@@ -967,7 +967,7 @@ SENAL:
 Par: {simbolo} | Fecha: {datetime.now().strftime('%Y-%m-%d %A')} | Mes: {datetime.now().month}
 Tendencia Daily: {t} | Tendencia BTC: {t_btc} | Precio: ${pc:.4f}
 Order Block: ${ob['zona_baja']:.4f} - ${ob['zona_alta']:.4f}
-Direccion: SHORT | Hora Chile: {hora_chile()}h
+Direccion: SHORT | Hora Venezuela: {hora_venezuela()}h
 Sesion activa: {sesion} | RSI 4H: {rsi_actual}
 {fear_greed}
 {funding}
@@ -1167,7 +1167,7 @@ def _cerrar_posicion(p: dict, pc: float):
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
                           (p["dir"] == "LONG"  and t_btc == "bajista")
-    if tendencia_invertida and p.get("tipo") != "recuperada":
+    if tendencia_invertida:
         log.info(f"{p['simbolo']} — CIERRE por cambio tendencia BTC ({t_btc}) contra {p['dir']}")
         tp_ok = False
         sl_ok = True
@@ -1359,7 +1359,7 @@ def analizar(simbolo: str):
             return
 
     if not en_horario_operacion():
-        log.info(f"{simbolo} — fuera de horario ({hora_chile()}h Chile)")
+        log.info(f"{simbolo} — fuera de horario ({hora_venezuela()}h Venezuela)")
         return
 
     df_d  = velas(simbolo, "1440", 50)
@@ -1495,6 +1495,21 @@ def verificar_inicio():
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
+                # Si posicion recuperada va contra la direccion del bot (SHORT only) — cerrar
+                if dir_ == "LONG":
+                    log.warning(f"Posicion recuperada LONG en bot SHORT — cerrando {simbolo}")
+                    tg(f"Posicion LONG recuperada en {simbolo} va contra bot SHORT — cerrando automaticamente")
+                    try:
+                        bx_post("/openApi/swap/v2/trade/order", {
+                            "symbol":       simbolo,
+                            "side":         "SELL",
+                            "positionSide": "LONG",
+                            "type":         "MARKET",
+                            "closePosition": "true",
+                        })
+                    except Exception as e:
+                        log.error(f"Error cerrando posicion recuperada LONG: {e}")
+                    continue
         if pos_bx:
             tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bx)} posicion(es).")
         else:
@@ -1512,7 +1527,7 @@ def verificar_inicio():
        f"Pares: {len(pares_ok)} | Capital: ${estado['capital']:.2f} USDT\n"
        f"x{estado['apalancamiento']} | TP: {TP_PCT*100:.0f}% | SL: {SL_PCT*100:.0f}%\n"
        f"SL diario: {SL_DIARIO_PCT*100:.0f}% | Max posiciones: {MAX_POSICIONES}\n"
-       f"Ciclo: 5-15 min | Horario: 6am-2am Chile\n\n"
+       f"Ciclo: 5-15 min | Horario: 24/7\n\n"
        f"{', '.join(pares_ok)}\n\nActivo 24/7 en Railway")
 
 # ─── DASHBOARD API ────────────────────────────────────────────────────────────
@@ -1590,7 +1605,7 @@ def api_estado():
         "trump_alerta":      trump_a,
         "tendencia_btc":     t_btc,
         "horario_ok":        en_horario_operacion(),
-        "hora_chile":        hora_chile(),
+        "hora_venezuela":    hora_venezuela(),
         "ciclo":             ciclo,
         "timestamp":         datetime.now().isoformat(),
     })
@@ -1728,7 +1743,7 @@ def main():
             estado["ciclo"] += 1
             ciclo = estado["ciclo"]
 
-        log.info(f"CICLO {ciclo} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Chile: {hora_chile()}h")
+        log.info(f"CICLO {ciclo} | {datetime.now().strftime('%Y-%m-%d %H:%M')} | Venezuela: {hora_venezuela()}h")
 
         if ciclo % 5 == 1:
             bal_real = balance_bingx()
@@ -1740,7 +1755,7 @@ def main():
         recalcular_capital()
 
         if not en_horario_operacion():
-            log.info(f"Fuera de horario ({hora_chile()}h Chile) — esperando 6am, sin operar")
+            log.info(f"Horario 24/7 activo ({hora_venezuela()}h Venezuela)")
         else:
             for s in estado["pares_activos"]:
                 try:
