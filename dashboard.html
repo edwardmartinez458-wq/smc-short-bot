@@ -381,7 +381,7 @@
 <header>
   <div class="logo">
     <div class="pulse-dot"></div>
-    SMC_BOT
+    SMC SHORT BOT
   </div>
   <div class="header-right">
     <span id="status-badge" class="badge">ONLINE</span>
@@ -390,69 +390,65 @@
 </header>
 
 <main>
-  <div id="paused-banner">⚠ Bot en pausa — las operaciones están detenidas</div>
+  <div id="paused-banner" style="display:none">Bot en pausa - las operaciones estan detenidas</div>
 
-  <!-- CONTROLS -->
   <div class="controls">
-    <button class="btn btn-pause"   onclick="pausar()">⏸ Pausar</button>
-    <button class="btn btn-resume"  onclick="reactivar()">▶ Reactivar</button>
-    <button class="btn btn-report"  onclick="reporte()">↗ Reporte</button>
+    <button class="btn btn-pause"   onclick="pausar()">Pausar</button>
+    <button class="btn btn-resume"  onclick="reactivar()">Reactivar</button>
   </div>
 
-  <!-- MONITORS -->
   <div class="monitors">
-    <div class="chip"><div class="dot"></div>SMC Market</div>
-    <div class="chip"><div class="dot"></div>Trump</div>
-    <div class="chip"><div class="dot"></div>Fed</div>
-    <div class="chip"><div class="dot"></div>SEC</div>
-    <div class="chip"><div class="dot"></div>CPI</div>
-    <div class="chip"><div class="dot"></div>Ballenas</div>
-    <div class="chip"><div class="dot"></div>Liquidaciones</div>
-    <div class="chip"><div class="dot"></div>KuCoin API</div>
+    <div class="chip"><div class="dot" id="dot-mercado"></div>Mercado BTC</div>
+    <div class="chip"><div class="dot" id="dot-trump"></div>Trump</div>
+    <div class="chip"><div class="dot" id="dot-fed"></div>Fed</div>
+    <div class="chip"><div class="dot" id="dot-ballenas"></div>Ballenas</div>
+    <div class="chip"><div class="dot" id="dot-liq"></div>Liquidaciones</div>
+    <div class="chip"><div class="dot" id="dot-bingx"></div>BingX API</div>
   </div>
 
-  <!-- STATS -->
+  <div style="text-align:center; padding: 0.5rem 0 0.75rem; font-size:0.85rem; color:var(--muted)">
+    Tendencia BTC diaria: <strong id="tendencia-label" style="color:var(--green)">---</strong>
+    &nbsp;|&nbsp; Hora Venezuela: <strong id="hora-ven">--</strong>h
+  </div>
+
   <div class="stats-grid">
     <div class="stat stat-accent">
       <div class="stat-label">Balance</div>
-      <div class="stat-val green" id="capital">$—</div>
+      <div class="stat-val green" id="capital">$--</div>
       <div class="stat-sub">USDT disponible</div>
     </div>
     <div class="stat">
       <div class="stat-label">P&L Abierto</div>
-      <div class="stat-val" id="pnl-total">$—</div>
-      <div class="stat-sub" id="pnl-pct">—</div>
+      <div class="stat-val" id="pnl-total">$0.00</div>
+      <div class="stat-sub" id="pnl-pct">0.00%</div>
     </div>
     <div class="stat stat-blue">
       <div class="stat-label">Posiciones</div>
-      <div class="stat-val blue" id="num-pos">—</div>
+      <div class="stat-val blue" id="num-pos">0</div>
       <div class="stat-sub">Abiertas ahora</div>
     </div>
     <div class="stat stat-accent">
       <div class="stat-label">Ganadas</div>
-      <div class="stat-val green" id="wins">—</div>
-      <div class="stat-sub" id="wr-label">Win rate</div>
-      <div class="stat-sub green" id="pnl-ganadas">+$0.00</div>
+      <div class="stat-val green" id="wins">0</div>
+      <div class="stat-sub" id="wr-label">Win rate 0%</div>
       <div class="wr-bar"><div class="wr-fill" id="wr-fill" style="width:0%"></div></div>
     </div>
     <div class="stat stat-red">
       <div class="stat-label">Perdidas</div>
-      <div class="stat-val red" id="losses">—</div>
-      <div class="stat-sub" id="pnl-hist">P&L total</div>
-      <div class="stat-sub red" id="pnl-perdidas">-$0.00</div>
+      <div class="stat-val red" id="losses">0</div>
+      <div class="stat-sub" id="pnl-hist">Total ops: 0</div>
     </div>
     <div class="stat">
       <div class="stat-label">Ciclo</div>
-      <div class="stat-val" id="ciclo">—</div>
-      <div class="stat-sub" id="proximo">—</div>
+      <div class="stat-val" id="ciclo">--</div>
+      <div class="stat-sub" id="proximo">--</div>
     </div>
   </div>
 
-  <!-- POSITIONS + LOGS -->
   <div class="grid-2">
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Mis futuros</span>
+        <span class="card-title">Posiciones SHORT abiertas</span>
         <span class="card-badge" id="pos-count">0</span>
       </div>
       <div id="pos-cards" class="pos-cards">
@@ -469,7 +465,6 @@
     </div>
   </div>
 
-  <!-- HISTORIAL + TRUMP -->
   <div class="grid-2">
     <div class="card">
       <div class="card-header">
@@ -483,11 +478,13 @@
 
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Trump Monitor</span>
-        <span class="card-badge" id="trump-count">0 posts</span>
+        <span class="card-title">Contexto Macro IA</span>
       </div>
-      <div style="max-height:240px; overflow-y:auto" id="trump-feed">
-        <div class="empty">Sin posts recientes</div>
+      <div style="padding:1rem; font-size:0.8rem; color:var(--muted); display:flex; flex-direction:column; gap:0.6rem">
+        <div><strong style="color:var(--text)">Trump:</strong> <span id="trump-text">Sin datos</span></div>
+        <div><strong style="color:var(--text)">Fed:</strong> <span id="fed-text">Sin datos</span></div>
+        <div><strong style="color:var(--text)">Ballenas:</strong> <span id="ballena-text">Sin datos</span></div>
+        <div><strong style="color:var(--text)">Liquidaciones:</strong> <span id="liq-text">Sin datos</span></div>
       </div>
     </div>
   </div>
@@ -498,30 +495,40 @@
 <script>
   const BASE = '';
 
-  function showNotif(msg, color) {
-    const n = document.getElementById('notif');
-    n.textContent = msg;
-    n.style.borderColor = color || 'var(--green)';
-    n.style.color = color || 'var(--green)';
-    n.classList.add('show');
-    setTimeout(() => n.classList.remove('show'), 3000);
-  }
-
-  function fmt(n, dec=2) {
-    if (n === undefined || n === null) return '—';
+  function fmt(n, dec) {
+    if (dec === undefined) dec = 2;
+    if (n === undefined || n === null) return '--';
     return parseFloat(n).toFixed(dec);
+  }
+  function showNotif(msg, color) {
+    if (!color) color = 'var(--green)';
+    var el = document.getElementById('notif');
+    el.textContent = msg; el.style.background = color; el.style.opacity = '1';
+    setTimeout(function() { el.style.opacity = '0'; }, 3000);
+  }
+  function setDot(id, active) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.style.background = active ? 'var(--green)' : 'rgba(255,255,255,0.2)';
   }
 
   async function cargarEstado() {
     try {
-      const r = await fetch(BASE + '/api/estado');
+      var r = await fetch(BASE + '/api/estado');
       if (!r.ok) throw new Error();
-      const d = await r.json();
+      var d = await r.json();
 
       document.getElementById('capital').textContent = '$' + fmt(d.capital);
-      document.getElementById('ciclo').textContent = d.ciclo || '—';
+      document.getElementById('ciclo').textContent   = d.ciclo !== undefined ? d.ciclo : '--';
+      document.getElementById('proximo').textContent = 'Ciclo #' + (d.ciclo || 0);
+      document.getElementById('hora-ven').textContent = d.hora_venezuela !== undefined ? d.hora_venezuela : '--';
 
-      const badge = document.getElementById('status-badge');
+      var tEl = document.getElementById('tendencia-label');
+      var t = (d.tendencia_btc || 'lateral').toUpperCase();
+      tEl.textContent = t;
+      tEl.style.color = t === 'BAJISTA' ? 'var(--green)' : t === 'ALCISTA' ? 'var(--red)' : 'var(--muted)';
+
+      var badge = document.getElementById('status-badge');
       if (d.pausado) {
         badge.textContent = 'PAUSADO'; badge.className = 'badge offline';
         document.getElementById('paused-banner').style.display = 'block';
@@ -530,57 +537,80 @@
         document.getElementById('paused-banner').style.display = 'none';
       }
 
-      const pos = d.posiciones || [];
-      document.getElementById('num-pos').textContent = pos.length;
+      var opsG = d.ops_ganadas || 0;
+      var opsT = d.ops_total   || 0;
+      var opsP = opsT - opsG;
+      document.getElementById('wins').textContent     = opsG;
+      document.getElementById('losses').textContent   = opsP;
+      document.getElementById('wr-label').textContent = 'Win rate ' + (d.win_rate || 0) + '%';
+      document.getElementById('wr-fill').style.width  = (d.win_rate || 0) + '%';
+      document.getElementById('pnl-hist').textContent = 'Total ops: ' + opsT;
+
+      setDot('dot-mercado',  d.tendencia_btc === 'bajista');
+      setDot('dot-trump',    !!d.trump_alerta);
+      setDot('dot-fed',      !!(d.fed_texto));
+      setDot('dot-ballenas', !!(d.ballena_texto));
+      setDot('dot-liq',      !!(d.liq_texto));
+      setDot('dot-bingx',    (d.capital || 0) > 0);
+
+      document.getElementById('trump-text').textContent   = d.trump_texto   || 'Sin datos';
+      document.getElementById('fed-text').textContent     = d.fed_texto     || 'Sin datos';
+      document.getElementById('ballena-text').textContent = d.ballena_texto || 'Sin datos';
+      document.getElementById('liq-text').textContent     = d.liq_texto     || 'Sin datos';
+
+      var pos = d.posiciones || [];
+      document.getElementById('num-pos').textContent   = pos.length;
       document.getElementById('pos-count').textContent = pos.length;
-      const posCards = document.getElementById('pos-cards');
+      var posCards = document.getElementById('pos-cards');
 
       if (!pos.length) {
         posCards.innerHTML = '<div class="empty">Sin posiciones abiertas</div>';
         document.getElementById('pnl-total').textContent = '$0.00';
-        document.getElementById('pnl-pct').textContent = '0.00%';
+        document.getElementById('pnl-total').className   = 'stat-val';
+        document.getElementById('pnl-pct').textContent   = '0.00%';
       } else {
-        let pnlTotal = 0;
-        posCards.innerHTML = pos.map(p => {
-          const pnl    = parseFloat(p.pnl || 0);
-          pnlTotal    += pnl;
-          const isLong = (p.dir||p.lado||'').toUpperCase() === 'LONG';
-          const pnlCls = pnl >= 0 ? 'pos' : 'neg';
-          const pnlSign = pnl >= 0 ? '+' : '';
-          const sideLbl = isLong ? 'Long' : 'Short';
-          return `
-          <div class="pos-card ${isLong ? 'long-card' : 'short-card'}">
-            <div class="pos-card-top">
-              <div style="display:flex;align-items:center;gap:8px">
-                <span class="pos-par">${p.simbolo||'—'}</span>
-                <span class="pos-side ${isLong?'long':'short'}">${sideLbl}</span>
-                <span class="pos-lev">10x</span>
-              </div>
-              <span class="pos-ia">IA ${p.confianza_ia||'—'}%</span>
-            </div>
-            <div class="pos-pnl ${pnlCls}">
-              ${pnlSign}$${fmt(pnl)}
-              <span class="pnl-pct">${pnlSign}${fmt(p.pnl_pct||0,2)}%</span>
-            </div>
-            <div class="pos-details">
-              <div>Entrada</div><div class="val">$${fmt(p.entrada,4)}</div>
-              <div>${p.tp1 ? (p.tp1_hit ? 'TP1 ✅' : 'TP1') : 'TP'}</div><div class="val" style="color:var(--green)">$${fmt(p.tp1||p.tp,4)}</div>
-              ${p.tp2 ? `<div>${p.tp1_hit ? 'TP2 🎯' : 'TP2'}</div><div class="val" style="color:#f7931a">$${fmt(p.tp2,4)}</div>` : ''}
-              <div>SL</div><div class="val" style="color:var(--red)">${p.tp1_hit ? '🔒 BE ' : ''}$${fmt(p.sl,4)}</div>
-              <div>Margen</div><div class="val">$${fmt(p.margen)}</div>
-            </div>
-            <button class="btn-cerrar" onclick="cerrarManual('${p.simbolo}')">Cerrar ${p.simbolo}</button>
-          </div>`;
+        var pnlTotal = 0;
+        posCards.innerHTML = pos.map(function(p) {
+          var pnl     = parseFloat(p.pnl || 0);
+          pnlTotal   += pnl;
+          var pnlCls  = pnl >= 0 ? 'pos' : 'neg';
+          var pnlSign = pnl >= 0 ? '+' : '';
+          var tp1hit  = p.tp1_hit;
+          var tpLabel = tp1hit ? 'TP2' : 'TP1';
+          var tpVal   = tp1hit ? (p.tp2||p.tp) : (p.tp1||p.tp);
+          var tp2row  = (p.tp2 && !tp1hit) ? '<div>TP2</div><div class="val" style="color:#f7931a">$' + fmt(p.tp2,4) + '</div>' : '';
+          var slLabel = tp1hit ? 'SL (BE)' : 'SL';
+          return '<div class="pos-card short-card">' +
+            '<div class="pos-card-top">' +
+              '<div style="display:flex;align-items:center;gap:8px">' +
+                '<span class="pos-par">' + (p.simbolo||'?') + '</span>' +
+                '<span class="pos-side short">Short</span>' +
+                '<span class="pos-lev">10x</span>' +
+              '</div>' +
+              '<span class="pos-ia">IA ' + (p.confianza_ia||'?') + '%</span>' +
+            '</div>' +
+            '<div class="pos-pnl ' + pnlCls + '">' + pnlSign + '$' + fmt(pnl) +
+              '<span class="pnl-pct">' + pnlSign + fmt(p.pnl_pct||0,2) + '%</span>' +
+            '</div>' +
+            '<div class="pos-details">' +
+              '<div>Entrada</div><div class="val">$' + fmt(p.entrada,4) + '</div>' +
+              '<div>' + tpLabel + '</div><div class="val" style="color:var(--green)">$' + fmt(tpVal,4) + '</div>' +
+              tp2row +
+              '<div>' + slLabel + '</div><div class="val" style="color:var(--red)">$' + fmt(p.sl,4) + '</div>' +
+              '<div>Margen</div><div class="val">$' + fmt(p.margen) + '</div>' +
+            '</div>' +
+            '<button class="btn-cerrar" onclick="cerrarManual(\'' + p.simbolo + '\')">Cerrar ' + p.simbolo + '</button>' +
+          '</div>';
         }).join('');
 
-        const pnlEl = document.getElementById('pnl-total');
+        var pnlEl = document.getElementById('pnl-total');
         pnlEl.textContent = (pnlTotal>=0?'+':'') + '$' + fmt(pnlTotal);
         pnlEl.className = 'stat-val ' + (pnlTotal>=0?'green':'red');
-        const cap = parseFloat(d.capital) || 91;
+        var cap = parseFloat(d.capital) || 1;
         document.getElementById('pnl-pct').textContent = fmt(pnlTotal/cap*100) + '%';
       }
 
-      document.getElementById('last-update').textContent = new Date().toLocaleTimeString('es-CL');
+      document.getElementById('last-update').textContent = new Date().toLocaleTimeString('es-VE');
     } catch(e) {
       document.getElementById('status-badge').textContent = 'ERROR';
       document.getElementById('status-badge').className = 'badge offline';
@@ -589,121 +619,70 @@
 
   async function cargarLogs() {
     try {
-      const r = await fetch(BASE + '/api/logs');
+      var r = await fetch(BASE + '/api/logs');
       if (!r.ok) return;
-      const d = await r.json();
-      const logs = (d.logs || []).slice(-60).reverse();
+      var d = await r.json();
+      var logs = (d.logs || []).slice(-60).reverse();
       document.getElementById('log-count').textContent = logs.length;
-      const list = document.getElementById('log-list');
-      list.innerHTML = logs.map(l => {
-        const lvl = (l.nivel || '').toLowerCase();
-        const msg = l.mensaje || l;
-        let cls = 'log-msg';
-        if (lvl === 'error') cls += ' error';
-        else if (lvl === 'warning' || lvl === 'warn') cls += ' warn';
-        else if (typeof msg === 'string' && (msg.includes('OK') || msg.includes('APRUEBA') || msg.includes('EJECUTANDO'))) cls += ' ok';
-        const time = (l.tiempo || '').slice(11, 19);
-        return `<div class="log-row"><span class="log-time">${time}</span><span class="${cls}">${msg}</span></div>`;
+      var list = document.getElementById('log-list');
+      list.innerHTML = logs.map(function(l) {
+        var lvl = (l.nivel || '').toLowerCase();
+        var msg = l.mensaje || l;
+        var cls = lvl === 'error' ? 'log-error' : lvl === 'warning' ? 'log-warn' : '';
+        return '<div class="log-entry ' + cls + '">' + msg + '</div>';
       }).join('');
     } catch(e) {}
   }
 
   async function cargarHistorial() {
     try {
-      const r = await fetch(BASE + '/api/historial');
+      var r = await fetch(BASE + '/api/historial');
       if (!r.ok) return;
-      const d = await r.json();
-      const hist = d.historial || d || [];
-      const el = document.getElementById('hist-list');
-      document.getElementById('hist-count').textContent = hist.length;
-
-      if (!hist.length) { el.innerHTML = '<div class="empty">Sin historial</div>'; return; }
-
-      const wins      = hist.filter(h => parseFloat(h.pnl||0) > 0).length;
-      const losses    = hist.filter(h => parseFloat(h.pnl||0) < 0).length;
-      const total     = hist.length;
-      const wr        = total ? Math.round(wins/total*100) : 0;
-      const pnlSum      = hist.reduce((a,h) => a + parseFloat(h.pnl||0), 0);
-      const pnlGanadas  = hist.filter(h => parseFloat(h.pnl||0) > 0).reduce((a,h) => a + parseFloat(h.pnl||0), 0);
-      const pnlPerdidas = hist.filter(h => parseFloat(h.pnl||0) < 0).reduce((a,h) => a + parseFloat(h.pnl||0), 0);
-
-      document.getElementById('wins').textContent   = wins;
-      document.getElementById('losses').textContent = losses;
-      document.getElementById('wr-label').textContent = `Win rate ${wr}%`;
-      document.getElementById('wr-fill').style.width  = wr + '%';
-      document.getElementById('pnl-hist').textContent = (pnlSum>=0?'+':'') + '$' + fmt(pnlSum);
-      document.getElementById('pnl-ganadas').textContent  = '+$' + fmt(pnlGanadas);
-      document.getElementById('pnl-perdidas').textContent = '-$' + fmt(Math.abs(pnlPerdidas));
-
-      el.innerHTML = hist.slice(-20).reverse().map(h => {
-        const pnl = parseFloat(h.pnl||0);
-        const cls = pnl >= 0 ? 'pos' : 'neg';
-        return `<div class="hist-item">
-          <div>
-            <div class="hist-par">${h.simbolo||'—'} <span style="color:var(--muted);font-weight:400">${(h.lado||'').toUpperCase()}</span></div>
-            <div class="hist-meta">${h.fecha||h.tiempo||'—'}${h.motivo ? ' · ' + h.motivo : ''}</div>
-          </div>
-          <div class="hist-pnl ${cls}">${pnl>=0?'+':''}$${fmt(pnl)}</div>
-        </div>`;
+      var ops = await r.json();
+      document.getElementById('hist-count').textContent = ops.length;
+      var list = document.getElementById('hist-list');
+      if (!ops.length) { list.innerHTML = '<div class="empty">Sin historial</div>'; return; }
+      list.innerHTML = ops.slice(-20).reverse().map(function(op) {
+        var pnl    = parseFloat(op.pnl || 0);
+        var pnlCls = pnl >= 0 ? 'pos' : 'neg';
+        var sign   = pnl >= 0 ? '+' : '';
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.8rem">' +
+          '<span>' + op.simbolo + ' ' + op.dir + '</span>' +
+          '<span class="' + pnlCls + '">' + sign + '$' + fmt(pnl) + '</span>' +
+          '<span style="color:var(--muted)">' + (op.ts||'').slice(11,16) + '</span>' +
+        '</div>';
       }).join('');
-    } catch(e) {}
-  }
-
-  async function cargarTrump() {
-    try {
-      const r = await fetch(BASE + '/api/trump');
-      if (!r.ok) return;
-      const d = await r.json();
-      const posts = d.posts || d || [];
-      document.getElementById('trump-count').textContent = posts.length + ' posts';
-      const feed = document.getElementById('trump-feed');
-      if (!posts.length) { feed.innerHTML = '<div class="empty">Sin posts recientes</div>'; return; }
-      feed.innerHTML = posts.slice(-10).reverse().map(p => `
-        <div class="trump-post">
-          <div>${p.texto||p.text||p}</div>
-          <div class="trump-date">${p.fecha||p.time||''}</div>
-        </div>
-      `).join('');
     } catch(e) {}
   }
 
   async function pausar() {
     try {
-      const r = await fetch(BASE + '/api/pausar', { method:'POST' });
-      const d = await r.json();
-      showNotif(d.mensaje||'Bot pausado', 'var(--warn)');
+      var r = await fetch(BASE + '/api/pausar', { method:'POST' });
+      var d = await r.json();
+      showNotif(d.mensaje || 'Pausado', 'var(--warn)');
       cargarEstado();
     } catch(e) { showNotif('Error al pausar', 'var(--red)'); }
   }
 
   async function reactivar() {
     try {
-      const r = await fetch(BASE + '/api/reactivar', { method:'POST' });
-      const d = await r.json();
-      showNotif(d.mensaje||'Bot reactivado', 'var(--green)');
+      var r = await fetch(BASE + '/api/reactivar', { method:'POST' });
+      var d = await r.json();
+      showNotif(d.mensaje || 'Reactivado', 'var(--green)');
       cargarEstado();
     } catch(e) { showNotif('Error al reactivar', 'var(--red)'); }
   }
 
-  async function reporte() {
-    showNotif('Enviando reporte a Telegram...', 'var(--green)');
-  }
-
   async function cerrarManual(simbolo) {
-    if (!confirm(`¿Cerrar posición ${simbolo} ahora al precio de mercado?`)) return;
     try {
-      const r = await fetch(BASE + '/api/cerrar_manual', {
+      var r = await fetch(BASE + '/api/cerrar_manual', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ simbolo })
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ simbolo: simbolo })
       });
-      const d = await r.json();
-      if (d.ok) {
-        showNotif(`✓ ${simbolo} cerrado`, 'var(--green)');
-        cargarEstado();
-      } else {
-        showNotif(`Error: ${d.error}`, 'var(--red)');
-      }
+      var d = await r.json();
+      if (d.ok) { showNotif(simbolo + ' cerrado', 'var(--green)'); cargarEstado(); }
+      else { showNotif('Error: ' + d.error, 'var(--red)'); }
     } catch(e) { showNotif('Error al cerrar', 'var(--red)'); }
   }
 
@@ -711,7 +690,6 @@
     cargarEstado();
     cargarLogs();
     cargarHistorial();
-    cargarTrump();
   }
 
   tick();
