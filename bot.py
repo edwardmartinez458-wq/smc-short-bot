@@ -837,45 +837,50 @@ def tendencia(df: pd.DataFrame, pc: float = None) -> str:
     if ref < ma20 * 0.992: return "bajista"
     return "lateral"
 
-def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
-    try:
-        if simbolo:
-            df15 = velas(simbolo, "15", 10)
-            if not df15.empty and len(df15) >= 4:
-                c = df15["close"].values
-                o = df15["open"].values
-                if t == "alcista" and sum(1 for i in [-1,-2,-3] if c[i]>o[i]) >= 2:
-                    return True
-                if t == "bajista" and sum(1 for i in [-1,-2,-3] if c[i]<o[i]) >= 2:
-                    return True
-    except Exception:
-        pass
-    if len(df4h) < 20: return False
-    u  = df4h.tail(20)
-    pc = u["close"].iloc[-1]
-    if t == "alcista": return pc > u["high"].iloc[:-3].max()
-    if t == "bajista": return pc < u["low"].iloc[:-3].min()
-    return False
+def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
+    """ADX (Average Directional Index). >20 = tendencia real, <20 = lateral."""
+    if len(df) < periodo * 2: return 0.0
+    h = df["high"].values
+    l = df["low"].values
+    c = df["close"].values
+    tr_list, pdm_list, ndm_list = [], [], []
+    for i in range(1, len(c)):
+        tr  = max(h[i] - l[i], abs(h[i] - c[i-1]), abs(l[i] - c[i-1]))
+        pdm = max(h[i] - h[i-1], 0) if (h[i] - h[i-1]) > (l[i-1] - l[i]) else 0
+        ndm = max(l[i-1] - l[i], 0) if (l[i-1] - l[i]) > (h[i] - h[i-1]) else 0
+        tr_list.append(tr); pdm_list.append(pdm); ndm_list.append(ndm)
+    def wilder(arr, n):
+        s = sum(arr[:n])
+        result = [s]
+        for v in arr[n:]:
+            s = s - s/n + v
+            result.append(s)
+        return result
+    atr_w = wilder(tr_list, periodo)
+    apdi  = wilder(pdm_list, periodo)
+    andi  = wilder(ndm_list, periodo)
+    dx_list = []
+    for i in range(len(atr_w)):
+        pdi = 100 * apdi[i] / atr_w[i] if atr_w[i] > 0 else 0
+        ndi = 100 * andi[i] / atr_w[i] if atr_w[i] > 0 else 0
+        dx  = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) > 0 else 0
+        dx_list.append(dx)
+    if len(dx_list) < periodo: return 0.0
+    return round(sum(dx_list[-periodo:]) / periodo, 2)
 
-def buscar_ob(df: pd.DataFrame, t: str) -> dict:
-    empty = {"zona_alta": 0, "zona_baja": 0, "valido": False}
-    if len(df) < 30: return empty
-    for i in range(len(df) - 5, max(len(df) - 45, 0), -1):
-        v, s = df.iloc[i], df.iloc[i+1]
-        if t == "alcista" and v["close"] < v["open"] and (s["close"]-s["open"]) > s["open"]*0.002:
-            return {"zona_alta": v["open"], "zona_baja": v["close"], "valido": True}
-        if t == "bajista" and v["close"] > v["open"] and (v["open"]-s["close"]) > s["open"]*0.002:
-            return {"zona_alta": v["close"], "zona_baja": v["open"], "valido": True}
-    return empty
-
-def en_ob(pc: float, ob: dict, t: str = "") -> bool:
-    if not ob["valido"]: return False
-    if t == "bajista":
-        return pc <= ob["zona_alta"] and pc >= ob["zona_baja"] * 0.95
+def hay_divergencia_rsi(df: pd.DataFrame, t: str) -> bool:
+    """Detecta divergencia RSI: precio hace nuevo extremo pero RSI no lo confirma."""
+    if len(df) < 30: return False
+    mitad   = len(df) // 2
+    rsi_rec = calcular_rsi(df.iloc[mitad:])
+    rsi_ant = calcular_rsi(df.iloc[:mitad])
+    pc_rec  = df["close"].values[-1]
+    pc_ant  = df["close"].values[mitad]
     if t == "alcista":
-        return pc >= ob["zona_baja"] and pc <= ob["zona_alta"] * 1.05
-    m = (ob["zona_alta"] - ob["zona_baja"]) * 0.5
-    return (ob["zona_baja"] - m) <= pc <= (ob["zona_alta"] + m)
+        return pc_rec > pc_ant and rsi_rec < rsi_ant - 5
+    if t == "bajista":
+        return pc_rec < pc_ant and rsi_rec > rsi_ant + 5
+    return False
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     if len(df) < periodo + 1: return 0.0
@@ -1331,6 +1336,17 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     atr = calcular_atr(df_4h)
     if atr / pc < 0.015:
         log.info(f"{simbolo} — RECHAZADO: ATR {atr/pc*100:.2f}% < 1.5% (mercado sin volatilidad)")
+        return
+
+    # Filtro ADX — tendencia debe tener fuerza real (evita entradas en lateral)
+    adx = calcular_adx(df_4h)
+    if adx < 20:
+        log.info(f"{simbolo} — RECHAZADO: ADX {adx:.1f} < 20 (tendencia debil/lateral)")
+        return
+
+    # Filtro divergencia RSI — evita entrar en agotamiento de tendencia
+    if hay_divergencia_rsi(df_4h, t):
+        log.info(f"{simbolo} — RECHAZADO: divergencia RSI detectada (agotamiento de tendencia)")
         return
 
     # Confirmacion 1H — vela con cuerpo real + cierre sobre/bajo EMA21
