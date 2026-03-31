@@ -191,17 +191,6 @@ def actualizar_tendencia_btc():
             log.error(f"Tendencia BTC: {e}")
         time.sleep(30 * 60)
 
-def filtro_tendencia_btc(dir_operacion: str) -> bool:
-    """Para SHORT: solo bloquea si BTC está en bear market extremo (bajo EMA200)"""
-    with lock:
-        t_btc = estado["tendencia_btc"]
-    # Permitir SHORTs siempre que BTC no este en colapso total (bajo EMA200)
-    if t_btc == "alcista":
-        return True  # BTC sobre EMA200: SHORTs permitidos (correcciones normales)
-    if t_btc == "bajista":
-        return True  # BTC bajo EMA200: SHORTs tambien permitidos (mas oportunidades)
-    return True
-
 # ─── TELEGRAM ────────────────────────────────────────────────────────────────
 
 def tg(msg: str):
@@ -1306,11 +1295,6 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     ema89_v = ema89.iloc[-1]
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
-
-    # No bloquear por tendencia diaria — EMA21<EMA89 en 4H ya filtra la direccion
-    if not filtro_tendencia_btc("bajista"):
-        log.info(f"{simbolo} — RECHAZADO: filtro BTC no permite SHORT ahora")
-        return
 
     if ema21_v >= ema89_v:
         log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
