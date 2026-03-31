@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from openai import OpenAI
 from flask import Flask, jsonify, send_from_directory
+from flask_cors import CORS
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -172,19 +173,15 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
-    """Actualiza tendencia BTC usando EMA50 en 4H"""
+    """Actualiza tendencia BTC usando precio actual vs MA20 diario — mismo criterio que analizar()"""
     while True:
         try:
-            df = velas("BTC-USDT", "240", 60)
-            if not df.empty and len(df) >= 50:
-                ema50 = df["close"].ewm(span=50, adjust=False).mean().iloc[-1]
-                precio_actual = df["close"].iloc[-1]
-                if precio_actual > ema50:
-                    t = "alcista"
-                    log.info(f"BTC sobre EMA50 (${precio_actual:.0f} > ${ema50:.0f}) — tendencia ALCISTA")
-                else:
-                    t = "bajista"
-                    log.info(f"BTC bajo EMA50 (${precio_actual:.0f} < ${ema50:.0f}) — tendencia BAJISTA")
+            df = velas("BTC-USDT", "1440", 50)
+            pc_real = precio("BTC-USDT")
+            if not df.empty and len(df) >= 20 and pc_real:
+                ma20 = df["close"].values[-20:].mean()
+                t    = tendencia(df, pc_real)
+                log.info(f"BTC tendencia diaria: {t.upper()} | precio actual ${pc_real:.0f} vs MA20 ${ma20:.0f}")
                 with lock:
                     estado["tendencia_btc"] = t
         except Exception as e:
@@ -829,53 +826,61 @@ def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
 
 # ─── SMC ──────────────────────────────────────────────────────────────────────
 
-def tendencia(df: pd.DataFrame) -> str:
+def tendencia(df: pd.DataFrame, pc: float = None) -> str:
+    """Tendencia diaria usando MA20.
+    SHORT: precio < MA20 - 1.5%"""
     if len(df) < 20: return "lateral"
-    c = df["close"].values
+    c    = df["close"].values
     ma20 = c[-20:].mean()
-    if c[-1] > ma20 * 1.002: return "alcista"
-    if c[-1] < ma20 * 0.998: return "bajista"
+    ref  = pc if pc else c[-1]
+    if ref > ma20 * 1.025: return "alcista"
+    if ref < ma20 * 0.985: return "bajista"
     return "lateral"
 
-def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
-    try:
-        if simbolo:
-            df15 = velas(simbolo, "15", 10)
-            if not df15.empty and len(df15) >= 4:
-                c = df15["close"].values
-                o = df15["open"].values
-                if t == "alcista" and sum(1 for i in [-1,-2,-3] if c[i]>o[i]) >= 2:
-                    return True
-                if t == "bajista" and sum(1 for i in [-1,-2,-3] if c[i]<o[i]) >= 2:
-                    return True
-    except Exception:
-        pass
-    if len(df4h) < 20: return False
-    u  = df4h.tail(20)
-    pc = u["close"].iloc[-1]
-    if t == "alcista": return pc > u["high"].iloc[:-3].max()
-    if t == "bajista": return pc < u["low"].iloc[:-3].min()
-    return False
+def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
+    """ADX (Average Directional Index). >20 = tendencia real, <20 = lateral."""
+    if len(df) < periodo * 2: return 0.0
+    h = df["high"].values
+    l = df["low"].values
+    c = df["close"].values
+    tr_list, pdm_list, ndm_list = [], [], []
+    for i in range(1, len(c)):
+        tr  = max(h[i] - l[i], abs(h[i] - c[i-1]), abs(l[i] - c[i-1]))
+        pdm = max(h[i] - h[i-1], 0) if (h[i] - h[i-1]) > (l[i-1] - l[i]) else 0
+        ndm = max(l[i-1] - l[i], 0) if (l[i-1] - l[i]) > (h[i] - h[i-1]) else 0
+        tr_list.append(tr); pdm_list.append(pdm); ndm_list.append(ndm)
+    def wilder(arr, n):
+        s = sum(arr[:n])
+        result = [s]
+        for v in arr[n:]:
+            s = s - s/n + v
+            result.append(s)
+        return result
+    atr_w = wilder(tr_list, periodo)
+    apdi  = wilder(pdm_list, periodo)
+    andi  = wilder(ndm_list, periodo)
+    dx_list = []
+    for i in range(len(atr_w)):
+        pdi = 100 * apdi[i] / atr_w[i] if atr_w[i] > 0 else 0
+        ndi = 100 * andi[i] / atr_w[i] if atr_w[i] > 0 else 0
+        dx  = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) > 0 else 0
+        dx_list.append(dx)
+    if len(dx_list) < periodo: return 0.0
+    return round(sum(dx_list[-periodo:]) / periodo, 2)
 
-def buscar_ob(df: pd.DataFrame, t: str) -> dict:
-    empty = {"zona_alta": 0, "zona_baja": 0, "valido": False}
-    if len(df) < 30: return empty
-    for i in range(len(df) - 5, max(len(df) - 45, 0), -1):
-        v, s = df.iloc[i], df.iloc[i+1]
-        if t == "alcista" and v["close"] < v["open"] and (s["close"]-s["open"]) > s["open"]*0.002:
-            return {"zona_alta": v["open"], "zona_baja": v["close"], "valido": True}
-        if t == "bajista" and v["close"] > v["open"] and (v["open"]-s["close"]) > s["open"]*0.002:
-            return {"zona_alta": v["close"], "zona_baja": v["open"], "valido": True}
-    return empty
-
-def en_ob(pc: float, ob: dict, t: str = "") -> bool:
-    if not ob["valido"]: return False
-    if t == "bajista":
-        return pc <= ob["zona_alta"] and pc >= ob["zona_baja"] * 0.95
+def hay_divergencia_rsi(df: pd.DataFrame, t: str) -> bool:
+    """Detecta divergencia RSI: precio hace nuevo extremo pero RSI no lo confirma."""
+    if len(df) < 30: return False
+    mitad   = len(df) // 2
+    rsi_rec = calcular_rsi(df.iloc[mitad:])
+    rsi_ant = calcular_rsi(df.iloc[:mitad])
+    pc_rec  = df["close"].values[-1]
+    pc_ant  = df["close"].values[mitad]
     if t == "alcista":
-        return pc >= ob["zona_baja"] and pc <= ob["zona_alta"] * 1.05
-    m = (ob["zona_alta"] - ob["zona_baja"]) * 0.5
-    return (ob["zona_baja"] - m) <= pc <= (ob["zona_alta"] + m)
+        return pc_rec > pc_ant and rsi_rec < rsi_ant - 5
+    if t == "bajista":
+        return pc_rec < pc_ant and rsi_rec > rsi_ant + 5
+    return False
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> float:
     if len(df) < periodo + 1: return 0.0
@@ -1014,14 +1019,14 @@ def abrir(simbolo, t, pc, ia):
 
     df_4h_sl = velas(simbolo, "240", 30)
     atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 2, pc * 0.03)
+    sl_dist  = max(atr_val * 1.5, pc * 0.02)  # v3f: R:R 1:1
     sl_pct   = sl_dist / pc
-    tp1_dist = max(atr_val * 1.5, pc * 0.015)
-    tp2_dist = max(atr_val * 3.0, pc * 0.03)
+    tp1_dist = max(atr_val * 1.5, pc * 0.02)  # v3f: TP = SL
+    tp2_dist = tp1_dist                         # unico TP
     sl  = round(pc + sl_dist, 6)
     tp1 = round(pc - tp1_dist, 6)
     tp2 = round(pc - tp2_dist, 6)
-    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
+    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP ${tp1:.4f} (R:R 1:1)")
 
     confianza = ia.get("confianza", 50)
     if confianza >= 76:
@@ -1051,7 +1056,7 @@ def abrir(simbolo, t, pc, ia):
     tp2_oid = f"tp2{int(time.time()*1000)}"
     log.info(f"{simbolo} — TP2 ${tp2:.4f} configurado (monitoreo por software)")
 
-    g_pot = riesgo_usdt * (TP_PCT / SL_PCT)
+    g_pot = riesgo_usdt * (tp2_dist / sl_dist)
     p_pot = riesgo_usdt
 
     with lock:
@@ -1262,8 +1267,12 @@ def _sincronizar_con_bingx():
                 continue
             entrada = float(pk.get("avgPrice", 0))
             amt     = float(pk.get("positionAmt", 0))
-            sl = round(entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 - TP_PCT), 6)
+            _df4h_s = velas(simbolo, "240", 30)
+            _atr_s  = calcular_atr(_df4h_s) if not _df4h_s.empty else 0
+            _sl_d_s = max(_atr_s * 2, entrada * 0.03)
+            _tp_d_s = max(_atr_s * 3.0, entrada * 0.03)
+            sl = round(entrada + _sl_d_s, 6)
+            tp = round(entrada - _tp_d_s, 6)
             lev = estado["apalancamiento"]
             margen = amt * entrada / lev if lev else 0
             with lock:
@@ -1305,37 +1314,68 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — sin suficientes velas 4H para EMA89")
         return
 
-    ema21 = df_4h["close"].ewm(span=21, adjust=False).mean()
-    ema89 = df_4h["close"].ewm(span=89, adjust=False).mean()
-    rsi   = calcular_rsi(df_4h)
+    # EMA21 / EMA89 en 4H — estructura de tendencia
+    ema21   = df_4h["close"].ewm(span=21, adjust=False).mean()
+    ema89   = df_4h["close"].ewm(span=89, adjust=False).mean()
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
-    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} RSI={rsi:.1f}")
+    # RSI, ADX y divergencia en 1H — mas reactivos a movimientos recientes
+    df_1h = velas(simbolo, "60", 60)
+    if df_1h.empty or len(df_1h) < 30:
+        log.info(f"{simbolo} — sin suficientes velas 1H")
+        return
+    rsi = calcular_rsi(df_1h)
+    adx = calcular_adx(df_1h)
 
+    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 1H={adx:.1f}")
+
+    # SHORT: EMA21 < EMA89 + RSI 32-55
     if ema21_v >= ema89_v:
-        log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin tendencia bajista 4H)")
+        log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
         return
-    if rsi > 60 or rsi < 25:
-        log.info(f"{simbolo} — RECHAZADO: RSI {rsi:.1f} fuera de rango SHORT (25-60)")
-        return
-    if pc > ema21_v:
-        log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 (pc=${pc:.4f} > ${ema21_v:.4f})")
+    if rsi > 55 or rsi < 32:
+        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-55)")
         return
 
-    # Filtro ATR minimo — mercado debe tener volatilidad suficiente
+    # ATR minimo 4H
     atr = calcular_atr(df_4h)
     if atr / pc < 0.015:
-        log.info(f"{simbolo} — RECHAZADO: ATR {atr/pc*100:.2f}% < 1.5% (mercado sin volatilidad)")
+        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 1.5%")
         return
 
-    # Confirmacion 1H — vela con cuerpo real + cierre sobre/bajo EMA21
-    df_1h = velas(simbolo, "60", 30)
-    if df_1h.empty or not confirma_1h(df_1h, t):
-        log.info(f"{simbolo} — RECHAZADO: 1H no confirma direccion {t}")
+    # ADX >= 28
+    if adx < 28:
+        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 28 (tendencia debil)")
         return
 
-    log.info(f"{simbolo} — EMA+RSI+1H OK — consultando IA...")
+    # Sin divergencia RSI 1H
+    if hay_divergencia_rsi(df_1h, t):
+        log.info(f"{simbolo} — RECHAZADO: divergencia RSI 1H detectada")
+        return
+
+    # Confirmacion 15min — rebote desde EMA21 (3/3 velas bajistas)
+    df_15m = velas(simbolo, "15", 50)
+    if df_15m.empty or len(df_15m) < 4:
+        log.info(f"{simbolo} — RECHAZADO: sin datos 15min")
+        return
+    ema21_15m  = df_15m["close"].ewm(span=21, adjust=False).mean().iloc[-1]
+    prev_high  = df_15m["high"].iloc[-2]
+    prev_close = df_15m["close"].iloc[-2]
+    c0 = df_15m["close"].iloc[-1]; o0 = df_15m["open"].iloc[-1]
+    c1 = df_15m["close"].iloc[-2]; o1 = df_15m["open"].iloc[-2]
+    c2 = df_15m["close"].iloc[-3]; o2 = df_15m["open"].iloc[-3]
+    velas_bear = sum([c0<o0, c1<o1, c2<o2])
+    bounce = (prev_high >= ema21_15m * 0.992) and (pc < prev_close) and (pc < ema21_15m)
+    conf   = velas_bear == 3 and pc < ema21_15m
+    if not bounce:
+        log.info(f"{simbolo} — RECHAZADO: sin rebote bajista desde EMA21 15m")
+        return
+    if not conf:
+        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 3 velas bajistas")
+        return
+
+    log.info(f"{simbolo} — EMA 4H + RSI/ADX 1H + 15min OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
     ia = filtro_ia(simbolo, t, pc, ob_ctx, 0)
 
@@ -1373,7 +1413,7 @@ def analizar(simbolo: str):
         log.info(f"{simbolo} — sin precio")
         return
 
-    t = tendencia(df_d)
+    t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
     if t != "bajista":
         log.info(f"{simbolo} — RECHAZADO: bot SHORT solo opera con tendencia bajista (actual: {t})")
@@ -1481,8 +1521,12 @@ def verificar_inicio():
                 continue
             entrada = float(pk.get("avgPrice", 0))
             amt     = float(pk.get("positionAmt", 0))
-            sl = round(entrada * (1 + SL_PCT), 6)
-            tp = round(entrada * (1 - TP_PCT), 6)
+            _df4h_i = velas(simbolo, "240", 30)
+            _atr_i  = calcular_atr(_df4h_i) if not _df4h_i.empty else 0
+            _sl_d_i = max(_atr_i * 2, entrada * 0.03)
+            _tp_d_i = max(_atr_i * 3.0, entrada * 0.03)
+            sl = round(entrada + _sl_d_i, 6)
+            tp = round(entrada - _tp_d_i, 6)
             lev = estado["apalancamiento"]
             margen = amt * entrada / lev if lev else 0
             ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
@@ -1491,7 +1535,7 @@ def verificar_inicio():
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
                     "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
                     "cantidad": amt, "margen": round(margen, 2),
-                    "g_pot": round(margen * TP_PCT, 2), "p_pot": round(margen * SL_PCT, 2),
+                    "g_pot": round(margen * (_tp_d_i / entrada), 2), "p_pot": round(margen * (_sl_d_i / entrada), 2),
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
@@ -1533,6 +1577,7 @@ def verificar_inicio():
 # ─── DASHBOARD API ────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder=".")
+CORS(app)
 
 @app.route("/")
 def index():
@@ -1559,6 +1604,10 @@ def api_estado():
         trump_t  = estado["ultimo_trump_texto"]
         trump_d  = estado["trump_direccion"]
         trump_a  = estado["trump_alerta_activa"]
+        fed_t    = estado["fed_texto"]
+        fed_d    = estado["fed_direccion"]
+        liq_t    = estado["liq_texto"]
+        ball_t   = estado["ballena_texto"]
         t_btc    = estado["tendencia_btc"]
         ciclo    = estado["ciclo"]
 
@@ -1603,6 +1652,10 @@ def api_estado():
         "trump_texto":       trump_t[:150] if trump_t else "",
         "trump_direccion":   trump_d,
         "trump_alerta":      trump_a,
+        "fed_texto":         fed_t[:150] if fed_t else "",
+        "fed_direccion":     fed_d,
+        "liq_texto":         liq_t[:150] if liq_t else "",
+        "ballena_texto":     ball_t[:150] if ball_t else "",
         "tendencia_btc":     t_btc,
         "horario_ok":        en_horario_operacion(),
         "hora_venezuela":    hora_venezuela(),
