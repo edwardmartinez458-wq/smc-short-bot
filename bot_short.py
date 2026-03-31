@@ -1124,36 +1124,48 @@ def _cerrar_posicion(p: dict, pc: float):
     tp_ok = (p["dir"] == "LONG" and pc >= p["tp"]) or (p["dir"] == "SHORT" and pc <= p["tp"])
     sl_ok = (p["dir"] == "LONG" and pc <= p["sl"]) or (p["dir"] == "SHORT" and pc >= p["sl"])
 
+    # ── Trailing stop dinamico por retroceso desde maximo/minimo ─────────────
     if not sl_ok and not tp_ok:
-        entrada  = p["entrada"]
-        mover    = False
-        nuevo_sl = p["sl"]
-        if p["dir"] == "LONG" and pc >= entrada * 1.08:
-            candidato = round(pc * (1 - SL_PCT), 6)
-            if candidato > p["sl"]:
-                nuevo_sl = candidato; mover = True
-        elif p["dir"] == "SHORT" and pc <= entrada * 0.92:
-            candidato = round(pc * (1 + SL_PCT), 6)
-            if candidato < p["sl"]:
-                nuevo_sl = candidato; mover = True
-        if mover:
-            close_side_bx = "SELL" if p["dir"] == "LONG" else "BUY"
-            pos_side_bx   = p["dir"]
-            if p.get("sl_oid"):
-                bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
-            nuevo_oid = f"sl{int(time.time()*1000)}"
-            bx_post("/openApi/swap/v2/trade/order", {
-                "symbol":        p["simbolo"],
-                "side":          close_side_bx,
-                "positionSide":  pos_side_bx,
-                "type":          "STOP_MARKET",
-                "stopPrice":     str(nuevo_sl),
-                "closePosition": "true",
-                "clientOrderID": nuevo_oid,
-            })
-            p["sl"]     = nuevo_sl
-            p["sl_oid"] = nuevo_oid
-            log.info(f"{p['simbolo']} — Trailing SL actualizado en BingX: ${nuevo_sl:.4f}")
+        with lock:
+            if p["dir"] == "LONG":
+                p["precio_max"] = max(p.get("precio_max", p["entrada"]), pc)
+                precio_ref = p["precio_max"]
+                retroceso  = (precio_ref - pc) / precio_ref if precio_ref > 0 else 0
+            else:
+                p["precio_min"] = min(p.get("precio_min", p["entrada"]), pc)
+                precio_ref = p["precio_min"]
+                retroceso  = (pc - precio_ref) / precio_ref if precio_ref > 0 else 0
+
+        ganancia_actual = (pc - p["entrada"]) / p["entrada"] if p["dir"] == "LONG" \
+                          else (p["entrada"] - pc) / p["entrada"]
+
+        if ganancia_actual > 0 and retroceso > 0:
+            cerrar_trailing = False
+            razon_trailing  = ""
+
+            if retroceso >= 0.10:
+                cerrar_trailing = True
+                razon_trailing  = f"Retroceso -10% desde ${precio_ref:.4f}"
+
+            elif retroceso >= 0.07:
+                df_1h_t = velas(p["simbolo"], "60", 20)
+                rsi_1h  = calcular_rsi(df_1h_t) if not df_1h_t.empty else 50
+                if (p["dir"] == "LONG" and rsi_1h < 55) or (p["dir"] == "SHORT" and rsi_1h > 45):
+                    cerrar_trailing = True
+                    razon_trailing  = f"Retroceso -7% + RSI 1H {rsi_1h:.0f}"
+
+            elif retroceso >= 0.03:
+                df_1h_t = velas(p["simbolo"], "60", 20)
+                rsi_1h  = calcular_rsi(df_1h_t) if not df_1h_t.empty else 50
+                if (p["dir"] == "LONG" and rsi_1h < 50) or (p["dir"] == "SHORT" and rsi_1h > 50):
+                    cerrar_trailing = True
+                    razon_trailing  = f"Retroceso -3% + RSI 1H {rsi_1h:.0f}"
+
+            if cerrar_trailing:
+                ganancia_pct = round(ganancia_actual * 100, 1)
+                log.warning(f"{p['simbolo']} TRAILING: {razon_trailing} | Ganancia: +{ganancia_pct}%")
+                tg(f"🔒 TRAILING STOP {p['simbolo']} {p['dir']}\n{razon_trailing}\nGanancia protegida: +{ganancia_pct}%")
+                sl_ok = True
 
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
