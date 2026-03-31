@@ -172,15 +172,15 @@ def obtener_funding_rate(simbolo: str) -> str:
 # ─── FILTRO TENDENCIA BTC ─────────────────────────────────────────────────────
 
 def actualizar_tendencia_btc():
-    """Actualiza tendencia BTC usando MA20 en diario — mismo criterio que analizar()"""
+    """Actualiza tendencia BTC usando precio actual vs MA20 diario — mismo criterio que analizar()"""
     while True:
         try:
             df = velas("BTC-USDT", "1440", 50)
-            if not df.empty and len(df) >= 20:
-                t = tendencia(df)
-                pc  = df["close"].iloc[-1]
+            pc_real = precio("BTC-USDT")
+            if not df.empty and len(df) >= 20 and pc_real:
                 ma20 = df["close"].values[-20:].mean()
-                log.info(f"BTC tendencia diaria: {t.upper()} | precio ${pc:.0f} vs MA20 ${ma20:.0f}")
+                t    = tendencia(df, pc_real)
+                log.info(f"BTC tendencia diaria: {t.upper()} | precio actual ${pc_real:.0f} vs MA20 ${ma20:.0f}")
                 with lock:
                     estado["tendencia_btc"] = t
         except Exception as e:
@@ -825,12 +825,15 @@ def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
 
 # ─── SMC ──────────────────────────────────────────────────────────────────────
 
-def tendencia(df: pd.DataFrame) -> str:
+def tendencia(df: pd.DataFrame, pc: float = None) -> str:
+    """Tendencia diaria usando MA20 con umbral 2%.
+    Usa precio actual (pc) si se provee, para evitar depender del cierre de ayer."""
     if len(df) < 20: return "lateral"
-    c = df["close"].values
+    c    = df["close"].values
     ma20 = c[-20:].mean()
-    if c[-1] > ma20 * 1.02: return "alcista"
-    if c[-1] < ma20 * 0.98: return "bajista"
+    ref  = pc if pc else c[-1]
+    if ref > ma20 * 1.02: return "alcista"
+    if ref < ma20 * 0.98: return "bajista"
     return "lateral"
 
 def hay_bos(df4h: pd.DataFrame, t: str, simbolo: str = "") -> bool:
@@ -1369,7 +1372,7 @@ def analizar(simbolo: str):
         log.info(f"{simbolo} — sin precio")
         return
 
-    t = tendencia(df_d)
+    t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
     if t != "bajista":
         log.info(f"{simbolo} — RECHAZADO: bot SHORT solo opera con tendencia bajista (actual: {t})")
