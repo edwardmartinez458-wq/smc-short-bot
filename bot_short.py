@@ -111,10 +111,7 @@ def hora_chile() -> int:
     return datetime.now(tz_fija).hour
 
 def en_horario_operacion() -> bool:
-    h = hora_chile()
-    if 2 <= h < 6:
-        return False
-    return True
+    return True  # Opera 24/7
 
 def reset_sl_diario():
     while True:
