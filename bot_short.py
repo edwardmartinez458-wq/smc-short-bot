@@ -28,10 +28,10 @@ DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 
 # Pares BingX Perpetual Futures (solo SHORT)
 PARES = [
-    "BTC-USDT",
-    "ETH-USDT",
     "SOL-USDT",
     "XRP-USDT",
+    "AVAX-USDT",
+    "DOT-USDT",
 ]
 
 # Precision de cantidad por par
