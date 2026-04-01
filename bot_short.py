@@ -552,7 +552,7 @@ def monitor_ballenas():
 # ─── BINGX PERPETUAL FUTURES API ─────────────────────────────────────────────
 
 def bx_sign(params: dict) -> str:
-    qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
     return hmac.new(BINGX_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
 def bx_headers() -> dict:
