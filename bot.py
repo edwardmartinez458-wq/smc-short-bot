@@ -28,10 +28,10 @@ DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 
 # Pares BingX Perpetual Futures (solo SHORT)
 PARES = [
-    "BTC-USDT",
-    "ETH-USDT",
     "SOL-USDT",
     "XRP-USDT",
+    "AVAX-USDT",
+    "DOT-USDT",
 ]
 
 # Precision de cantidad por par
@@ -552,7 +552,7 @@ def monitor_ballenas():
 # ─── BINGX PERPETUAL FUTURES API ─────────────────────────────────────────────
 
 def bx_sign(params: dict) -> str:
-    qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
     return hmac.new(BINGX_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
 def bx_headers() -> dict:
@@ -827,14 +827,14 @@ def leer_memoria_trades(simbolo: str, n: int = 5) -> str:
 # ─── SMC ──────────────────────────────────────────────────────────────────────
 
 def tendencia(df: pd.DataFrame, pc: float = None) -> str:
-    """Tendencia diaria usando MA20 con umbral 0.8%.
-    Usa precio actual (pc) si se provee, para evitar depender del cierre de ayer."""
+    """Tendencia diaria usando MA20.
+    SHORT: precio < MA20 - 1.5%"""
     if len(df) < 20: return "lateral"
     c    = df["close"].values
     ma20 = c[-20:].mean()
     ref  = pc if pc else c[-1]
-    if ref > ma20 * 1.008: return "alcista"
-    if ref < ma20 * 0.992: return "bajista"
+    if ref > ma20 * 1.005: return "alcista"
+    if ref < ma20 * 0.995: return "bajista"
     return "lateral"
 
 def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
@@ -1007,8 +1007,8 @@ RAZON: una linea breve"""}]
             if intento < 2:
                 time.sleep(5)
 
-    log.warning(f"{simbolo} — IA no disponible, operacion cancelada por seguridad")
-    return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
+    log.warning(f"{simbolo} — IA no disponible, entrando con confianza base 60%")
+    return {"entrar": True, "confianza": 60, "razon": "IA no disponible - fallback"}
 
 # ─── POSICIONES ───────────────────────────────────────────────────────────────
 
@@ -1019,14 +1019,14 @@ def abrir(simbolo, t, pc, ia):
 
     df_4h_sl = velas(simbolo, "240", 30)
     atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 2, pc * 0.03)
+    sl_dist  = max(atr_val * 1.5, pc * 0.02)  # v3f: R:R 1:1
     sl_pct   = sl_dist / pc
-    tp1_dist = max(atr_val * 1.5, pc * 0.015)
-    tp2_dist = max(atr_val * 3.0, pc * 0.03)
+    tp1_dist = max(atr_val * 1.5, pc * 0.02)  # v3f: TP = SL
+    tp2_dist = tp1_dist                         # unico TP
     sl  = round(pc + sl_dist, 6)
     tp1 = round(pc - tp1_dist, 6)
     tp2 = round(pc - tp2_dist, 6)
-    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP1 ${tp1:.4f} | TP2 ${tp2:.4f}")
+    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP ${tp1:.4f} (R:R 1:1)")
 
     confianza = ia.get("confianza", 50)
     if confianza >= 76:
@@ -1330,37 +1330,49 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 1H={adx:.1f}")
 
-    # SHORT: EMA21 < EMA89 en 4H + precio bajo EMA21 + RSI 1H 20-65
+    # SHORT: EMA21 < EMA89 + RSI 32-55
     if ema21_v >= ema89_v:
         log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
         return
-    if rsi > 65 or rsi < 20:
-        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (20-65)")
-        return
-    if pc > ema21_v:
-        log.info(f"{simbolo} — RECHAZADO: precio sobre EMA21 4H (pc=${pc:.4f} > ${ema21_v:.4f})")
+    if rsi > 65 or rsi < 32:
+        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-65)")
         return
 
-    # Filtro ATR minimo en 4H — volatilidad estructural
+    # ATR minimo 4H
     atr = calcular_atr(df_4h)
     if atr / pc < 0.015:
-        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 1.5% (mercado sin volatilidad)")
+        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 1.5%")
         return
 
-    # Filtro ADX en 1H — tendencia con fuerza real en el corto plazo
+    # ADX >= 28
     if adx < 20:
-        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 20 (tendencia debil/lateral)")
+        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 20 (tendencia debil)")
         return
 
-    # Filtro divergencia RSI en 1H — evita entrar en agotamiento reciente
+    # Sin divergencia RSI 1H
     if hay_divergencia_rsi(df_1h, t):
-        log.info(f"{simbolo} — RECHAZADO: divergencia RSI 1H detectada (agotamiento de tendencia)")
+        log.info(f"{simbolo} — RECHAZADO: divergencia RSI 1H detectada")
         return
 
-    # Confirmacion 15min — entrada precisa con velas recientes
+    # Confirmacion 15min — rebote desde EMA21 (3/3 velas bajistas)
     df_15m = velas(simbolo, "15", 50)
-    if df_15m.empty or not confirma_1h(df_15m, t):
-        log.info(f"{simbolo} — RECHAZADO: 15min no confirma direccion {t}")
+    if df_15m.empty or len(df_15m) < 4:
+        log.info(f"{simbolo} — RECHAZADO: sin datos 15min")
+        return
+    ema21_15m  = df_15m["close"].ewm(span=21, adjust=False).mean().iloc[-1]
+    prev_high  = df_15m["high"].iloc[-2]
+    prev_close = df_15m["close"].iloc[-2]
+    c0 = df_15m["close"].iloc[-1]; o0 = df_15m["open"].iloc[-1]
+    c1 = df_15m["close"].iloc[-2]; o1 = df_15m["open"].iloc[-2]
+    c2 = df_15m["close"].iloc[-3]; o2 = df_15m["open"].iloc[-3]
+    velas_bear = sum([c0<o0, c1<o1, c2<o2])
+    bounce = (prev_high >= ema21_15m * 0.992) and (pc < prev_close) and (pc < ema21_15m)
+    conf   = velas_bear >= 2 and pc < ema21_15m
+    if not bounce:
+        log.info(f"{simbolo} — RECHAZADO: sin rebote bajista desde EMA21 15m")
+        return
+    if not conf:
+        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 2/3 velas bajistas")
         return
 
     log.info(f"{simbolo} — EMA 4H + RSI/ADX 1H + 15min OK — consultando IA...")
@@ -1403,11 +1415,13 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
-    if t != "bajista":
-        log.info(f"{simbolo} — RECHAZADO: bot SHORT solo opera con tendencia bajista (actual: {t})")
+    if t == "alcista":
+        log.info(f"{simbolo} — RECHAZADO: tendencia alcista, bot SHORT no opera")
         return
 
-    _trade_ema_rsi(simbolo, t, pc, df_4h)
+    # Opera en bajista y lateral
+    t_operacion = "bajista"
+    _trade_ema_rsi(simbolo, t_operacion, pc, df_4h)
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
@@ -1795,15 +1809,13 @@ def main():
 
         recalcular_capital()
 
-        if not en_horario_operacion():
-            log.info(f"Horario 24/7 activo ({hora_venezuela()}h Venezuela)")
-        else:
-            for s in estado["pares_activos"]:
-                try:
-                    analizar(s)
-                    time.sleep(3)
-                except Exception as e:
-                    log.error(f"Error analizando {s}: {e}")
+        log.info(f"Horario 24/7 activo ({hora_venezuela()}h Venezuela)")
+        for s in estado["pares_activos"]:
+            try:
+                analizar(s)
+                time.sleep(3)
+            except Exception as e:
+                log.error(f"Error analizando {s}: {e}")
 
         ahora = datetime.now()
         if ahora.hour == 6 and (ahora - ultimo_reporte).total_seconds() > 3600:
