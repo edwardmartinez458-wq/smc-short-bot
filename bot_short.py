@@ -1334,8 +1334,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     if ema21_v >= ema89_v:
         log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
         return
-    if rsi > 55 or rsi < 32:
-        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-55)")
+    if rsi > 65 or rsi < 32:
+        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-65)")
         return
 
     # ATR minimo 4H
@@ -1345,8 +1345,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         return
 
     # ADX >= 28
-    if adx < 28:
-        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 28 (tendencia debil)")
+    if adx < 20:
+        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 20 (tendencia debil)")
         return
 
     # Sin divergencia RSI 1H
@@ -1367,12 +1367,12 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     c2 = df_15m["close"].iloc[-3]; o2 = df_15m["open"].iloc[-3]
     velas_bear = sum([c0<o0, c1<o1, c2<o2])
     bounce = (prev_high >= ema21_15m * 0.992) and (pc < prev_close) and (pc < ema21_15m)
-    conf   = velas_bear == 3 and pc < ema21_15m
+    conf   = velas_bear >= 2 and pc < ema21_15m
     if not bounce:
         log.info(f"{simbolo} — RECHAZADO: sin rebote bajista desde EMA21 15m")
         return
     if not conf:
-        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 3 velas bajistas")
+        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 2/3 velas bajistas")
         return
 
     log.info(f"{simbolo} — EMA 4H + RSI/ADX 1H + 15min OK — consultando IA...")
