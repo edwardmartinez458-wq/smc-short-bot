@@ -1007,8 +1007,8 @@ RAZON: una linea breve"""}]
             if intento < 2:
                 time.sleep(5)
 
-    log.warning(f"{simbolo} — IA no disponible, operacion cancelada por seguridad")
-    return {"entrar": False, "confianza": 0, "razon": "IA no disponible"}
+    log.warning(f"{simbolo} — IA no disponible, entrando con confianza base 60%")
+    return {"entrar": True, "confianza": 60, "razon": "IA no disponible - fallback"}
 
 # ─── POSICIONES ───────────────────────────────────────────────────────────────
 
@@ -1415,11 +1415,13 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
-    if t != "bajista":
-        log.info(f"{simbolo} — RECHAZADO: bot SHORT solo opera con tendencia bajista (actual: {t})")
+    if t == "alcista":
+        log.info(f"{simbolo} — RECHAZADO: tendencia alcista, bot SHORT no opera")
         return
 
-    _trade_ema_rsi(simbolo, t, pc, df_4h)
+    # Opera en bajista y lateral
+    t_operacion = "bajista"
+    _trade_ema_rsi(simbolo, t_operacion, pc, df_4h)
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
