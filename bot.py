@@ -40,6 +40,8 @@ BX_QTY_PRECISION = {
     "ETH-USDT": 2,
     "SOL-USDT": 1,
     "XRP-USDT": 0,
+    "AVAX-USDT": 1,
+    "DOT-USDT": 0,
 }
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
@@ -1334,14 +1336,14 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     if ema21_v >= ema89_v:
         log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
         return
-    if rsi > 65 or rsi < 32:
-        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-65)")
+    if rsi > 75 or rsi < 32:
+        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
         return
 
     # ATR minimo 4H
     atr = calcular_atr(df_4h)
-    if atr / pc < 0.015:
-        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 1.5%")
+    if atr / pc < 0.005:
+        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 0.5%")
         return
 
     # ADX >= 28
@@ -1360,14 +1362,18 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO: sin datos 15min")
         return
     ema21_15m  = df_15m["close"].ewm(span=21, adjust=False).mean().iloc[-1]
-    prev_high  = df_15m["high"].iloc[-2]
     prev_close = df_15m["close"].iloc[-2]
     c0 = df_15m["close"].iloc[-1]; o0 = df_15m["open"].iloc[-1]
     c1 = df_15m["close"].iloc[-2]; o1 = df_15m["open"].iloc[-2]
     c2 = df_15m["close"].iloc[-3]; o2 = df_15m["open"].iloc[-3]
+    prev_high  = df_15m["high"].iloc[-2]
     velas_bear = sum([c0<o0, c1<o1, c2<o2])
-    bounce = (prev_high >= ema21_15m * 0.992) and (pc < prev_close) and (pc < ema21_15m)
-    conf   = velas_bear >= 2 and pc < ema21_15m
+    # Modo 1: precio toca EMA21 y rebota (bajada clasica desde resistencia)
+    toco_ema  = (prev_high >= ema21_15m * 0.992) and (pc < ema21_15m)
+    # Modo 2: precio cerca de EMA21 (rebote en tendencia bajista fuerte)
+    cerca_ema = pc <= ema21_15m * 1.02
+    bounce    = (toco_ema or cerca_ema) and (pc < prev_close)
+    conf      = velas_bear >= 2 and cerca_ema
     if not bounce:
         log.info(f"{simbolo} — RECHAZADO: sin rebote bajista desde EMA21 15m")
         return
