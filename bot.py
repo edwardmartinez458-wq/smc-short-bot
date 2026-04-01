@@ -697,15 +697,18 @@ def precio_binance(simbolo: str) -> float:
 
 def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> float:
     with lock:
-        cap = estado["capital"]
         lev = estado["apalancamiento"]
-    margen   = cap * capital_pct * 0.90
-    notional = margen * lev
+    disponible = saldo_disponible_bingx()
+    if disponible <= 0:
+        with lock:
+            disponible = estado["capital"]
+    margen    = disponible * capital_pct * 0.90
+    notional  = margen * lev
     precision = BX_QTY_PRECISION.get(simbolo, 3)
     cant = round(notional / pc, precision)
     min_qty = 10 ** (-precision)
     cant = max(min_qty, cant)
-    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | qty={cant} {simbolo}")
+    log.info(f"Capital usado: {capital_pct*100:.0f}% (${margen:.2f}) | disponible=${disponible:.2f} | qty={cant} {simbolo}")
     return cant
 
 def _bx_set_leverage(simbolo: str, lev: int):
@@ -768,6 +771,18 @@ def balance_bingx() -> float:
             return float(bal_obj.get("balance", 0))
     except Exception as e:
         log.error(f"Balance BingX: {e}")
+    return 0.0
+
+def saldo_disponible_bingx() -> float:
+    """Retorna solo el saldo libre (sin margen en uso). Evita insufficient balance."""
+    try:
+        result = bx_get("/openApi/swap/v2/user/balance")
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            bal_obj = data.get("balance", {})
+            return float(bal_obj.get("availableMargin", bal_obj.get("balance", 0)))
+    except Exception as e:
+        log.error(f"Saldo disponible BingX: {e}")
     return 0.0
 
 # ─── GESTION CAPITAL ──────────────────────────────────────────────────────────
