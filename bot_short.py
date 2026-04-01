@@ -1809,15 +1809,13 @@ def main():
 
         recalcular_capital()
 
-        if not en_horario_operacion():
-            log.info(f"Horario 24/7 activo ({hora_venezuela()}h Venezuela)")
-        else:
-            for s in estado["pares_activos"]:
-                try:
-                    analizar(s)
-                    time.sleep(3)
-                except Exception as e:
-                    log.error(f"Error analizando {s}: {e}")
+        log.info(f"Horario 24/7 activo ({hora_venezuela()}h Venezuela)")
+        for s in estado["pares_activos"]:
+            try:
+                analizar(s)
+                time.sleep(3)
+            except Exception as e:
+                log.error(f"Error analizando {s}: {e}")
 
         ahora = datetime.now()
         if ahora.hour == 6 and (ahora - ultimo_reporte).total_seconds() > 3600:
