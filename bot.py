@@ -1592,6 +1592,20 @@ def verificar_inicio():
             margen = amt * entrada / lev if lev else 0
             ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
             if not ya_existe:
+                pc_actual = precio(simbolo)
+                # Si el precio ya rompió el SL — cerrar inmediatamente, no monitorear
+                if dir_ == "SHORT" and pc_actual >= sl:
+                    log.warning(f"POSICION RECUPERADA {simbolo} SHORT ya superó SL (${pc_actual:.4f} >= ${sl:.4f}) — cerrando")
+                    tg(f"Posicion {simbolo} SHORT recuperada ya superó SL — cerrando automaticamente")
+                    try:
+                        bx_post("/openApi/swap/v2/trade/order", {
+                            "symbol": simbolo, "side": "BUY",
+                            "positionSide": "SHORT", "type": "MARKET",
+                            "closePosition": "true",
+                        })
+                    except Exception as e:
+                        log.error(f"Error cerrando posicion SL alcanzado: {e}")
+                    continue
                 estado["posiciones"].append({
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
                     "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
@@ -1599,7 +1613,8 @@ def verificar_inicio():
                     "g_pot": round(margen * (_tp_d_i / entrada), 2), "p_pot": round(margen * (_sl_d_i / entrada), 2),
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
-                log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f}")
+                log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} SL=${sl:.4f} TP=${tp:.4f}")
+                tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}")
                 # Si posicion recuperada va contra la direccion del bot (SHORT only) — cerrar
                 if dir_ == "LONG":
                     log.warning(f"Posicion recuperada LONG en bot SHORT — cerrando {simbolo}")
