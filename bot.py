@@ -714,6 +714,7 @@ def calcular_cantidad(simbolo: str, pc: float, capital_pct: float = 0.50) -> flo
 def _bx_set_leverage(simbolo: str, lev: int):
     try:
         bx_post("/openApi/swap/v2/trade/leverage", {"symbol": simbolo, "side": "SHORT", "leverage": lev})
+        bx_post("/openApi/swap/v2/trade/leverage", {"symbol": simbolo, "side": "LONG", "leverage": lev})
     except Exception as e:
         log.warning(f"Set leverage {simbolo}: {e}")
 
@@ -1068,20 +1069,24 @@ RAZON: una linea breve"""}]
 # ─── POSICIONES ───────────────────────────────────────────────────────────────
 
 def abrir(simbolo, t, pc, ia):
-    if t != "bajista":
-        log.info(f"{simbolo} — abrir() llamado con tendencia {t}, ignorado (solo SHORT)")
-        return
+    es_long = (t == "alcista")
 
     df_4h_sl = velas(simbolo, "240", 30)
     atr_val  = calcular_atr(df_4h_sl) if not df_4h_sl.empty else 0
-    sl_dist  = max(atr_val * 1.5, pc * 0.02)  # v3f: R:R 1:1
+    sl_dist  = max(atr_val * 1.5, pc * 0.02)
     sl_pct   = sl_dist / pc
-    tp1_dist = max(atr_val * 1.5, pc * 0.02)  # v3f: TP = SL
-    tp2_dist = tp1_dist                         # unico TP
-    sl  = round(pc + sl_dist, 6)
-    tp1 = round(pc - tp1_dist, 6)
-    tp2 = round(pc - tp2_dist, 6)
-    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP ${tp1:.4f} (R:R 1:1)")
+    tp1_dist = max(atr_val * 1.5, pc * 0.02)
+    tp2_dist = tp1_dist
+    if es_long:
+        sl  = round(pc - sl_dist, 6)
+        tp1 = round(pc + tp1_dist, 6)
+        tp2 = round(pc + tp2_dist, 6)
+    else:
+        sl  = round(pc + sl_dist, 6)
+        tp1 = round(pc - tp1_dist, 6)
+        tp2 = round(pc - tp2_dist, 6)
+    dir_txt = "LONG" if es_long else "SHORT"
+    log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP ${tp1:.4f} (R:R 1:1) [{dir_txt}]")
 
     confianza = ia.get("confianza", 50)
     if confianza >= 76:
@@ -1103,7 +1108,8 @@ def abrir(simbolo, t, pc, ia):
     cant_tp1 = max(min_qty, cant_tp1)
     cant_tp2 = max(min_qty, cant_tp2)
 
-    resultado = ejecutar_orden(simbolo, "sell", cant, sl, tp1, cant_tp=cant_tp1)
+    lado_entrada = "buy" if es_long else "sell"
+    resultado = ejecutar_orden(simbolo, lado_entrada, cant, sl, tp1, cant_tp=cant_tp1)
     if not resultado:
         return
     sl_oid, tp1_oid = resultado
@@ -1117,7 +1123,7 @@ def abrir(simbolo, t, pc, ia):
     with lock:
         estado["posiciones"].append({
             "simbolo":      simbolo,
-            "dir":          "SHORT",
+            "dir":          "LONG" if es_long else "SHORT",
             "entrada":      pc,
             "sl":           sl,
             "tp":           tp1,
@@ -1139,7 +1145,7 @@ def abrir(simbolo, t, pc, ia):
         })
         estado["ops_total"] += 1
 
-    tg(f"ENTRADA {simbolo} SHORT @ ${pc:.4f}\n"
+    tg(f"ENTRADA {simbolo} {'LONG' if es_long else 'SHORT'} @ ${pc:.4f}\n"
        f"IA {ia['confianza']}% | Riesgo: ${p_pot:.2f} USDT\n"
        f"SL: ${sl:.4f} | TP1: ${tp1:.4f} (50%) | TP2: ${tp2:.4f} (50%)\n"
        f"Razon: {ia['razon']}")
@@ -1389,13 +1395,21 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 4H={adx:.1f}")
 
-    # SHORT: EMA21 < EMA89 + RSI 32-55
-    if ema21_v >= ema89_v:
-        log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
-        return
-    if rsi > 75 or rsi < 32:
-        log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
-        return
+    # Verificar estructura 4H segun tendencia
+    if t == "alcista":
+        if ema21_v <= ema89_v:
+            log.info(f"{simbolo} — RECHAZADO: EMA21 < EMA89 (sin estructura alcista 4H)")
+            return
+        if rsi < 35 or rsi > 75:
+            log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (35-75)")
+            return
+    else:
+        if ema21_v >= ema89_v:
+            log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
+            return
+        if rsi > 75 or rsi < 32:
+            log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
+            return
 
     # ATR minimo 4H
     atr = calcular_atr(df_4h)
@@ -1403,9 +1417,9 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 0.5%")
         return
 
-    # ADX >= 28
+    # ADX >= 20
     if adx < 20:
-        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 20 (tendencia debil)")
+        log.info(f"{simbolo} — RECHAZADO: ADX 4H {adx:.1f} < 20 (tendencia debil)")
         return
 
     # Sin divergencia RSI 1H
@@ -1413,32 +1427,40 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO: divergencia RSI 1H detectada")
         return
 
-    # Confirmacion 15min — rebote desde EMA21 (3/3 velas bajistas)
+    # Confirmacion 15min
     df_15m = velas(simbolo, "15", 50)
     if df_15m.empty or len(df_15m) < 4:
         log.info(f"{simbolo} — RECHAZADO: sin datos 15min")
         return
     ema21_15m  = df_15m["close"].ewm(span=21, adjust=False).mean().iloc[-1]
     prev_close = df_15m["close"].iloc[-2]
+    prev_low   = df_15m["low"].iloc[-2]
+    prev_high  = df_15m["high"].iloc[-2]
     c0 = df_15m["close"].iloc[-1]; o0 = df_15m["open"].iloc[-1]
     c1 = df_15m["close"].iloc[-2]; o1 = df_15m["open"].iloc[-2]
     c2 = df_15m["close"].iloc[-3]; o2 = df_15m["open"].iloc[-3]
-    prev_high  = df_15m["high"].iloc[-2]
+    velas_bull = sum([c0>o0, c1>o1, c2>o2])
     velas_bear = sum([c0<o0, c1<o1, c2<o2])
-    # Modo 1: precio toca EMA21 y rebota (bajada clasica desde resistencia)
-    toco_ema  = (prev_high >= ema21_15m * 0.992) and (pc < ema21_15m)
-    # Modo 2: precio cerca de EMA21 (rebote en tendencia bajista fuerte)
-    cerca_ema = pc <= ema21_15m * 1.02
-    bounce    = (toco_ema or cerca_ema) and (pc < prev_close)
-    conf      = velas_bear >= 2 and cerca_ema
+
+    if t == "alcista":
+        toco_ema  = (prev_low <= ema21_15m * 1.008) and (pc > ema21_15m)
+        cerca_ema = pc >= ema21_15m * 0.98
+        bounce    = (toco_ema or cerca_ema) and (pc > prev_close)
+        conf      = velas_bull >= 2 and cerca_ema
+    else:
+        toco_ema  = (prev_high >= ema21_15m * 0.992) and (pc < ema21_15m)
+        cerca_ema = pc <= ema21_15m * 1.02
+        bounce    = (toco_ema or cerca_ema) and (pc < prev_close)
+        conf      = velas_bear >= 2 and cerca_ema
+
     if not bounce:
-        log.info(f"{simbolo} — RECHAZADO: sin rebote bajista desde EMA21 15m")
+        log.info(f"{simbolo} — RECHAZADO: sin rebote desde EMA21 15m")
         return
     if not conf:
-        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 2/3 velas bajistas")
+        log.info(f"{simbolo} — RECHAZADO: 15min no confirma 2/3 velas en direccion {t}")
         return
 
-    log.info(f"{simbolo} — EMA 4H + RSI/ADX 1H + 15min OK — consultando IA...")
+    log.info(f"{simbolo} — EMA 4H + RSI/ADX + 15min OK — consultando IA...")
     ob_ctx = {"zona_baja": round(pc * 0.97, 4), "zona_alta": round(pc * 1.03, 4), "valido": True, "toques": 0}
     ia = filtro_ia(simbolo, t, pc, ob_ctx, 0)
 
@@ -1446,7 +1468,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         log.info(f"{simbolo} — RECHAZADO por IA ({ia['confianza']}%): {ia['razon']}")
         return
 
-    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO SHORT")
+    dir_txt = "LONG" if t == "alcista" else "SHORT"
+    log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO {dir_txt}")
     abrir(simbolo, t, pc, ia)
 
 def analizar(simbolo: str):
@@ -1478,13 +1501,12 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
-    if t == "alcista":
-        log.info(f"{simbolo} — RECHAZADO: tendencia alcista, bot SHORT no opera")
+    if t == "lateral":
+        log.info(f"{simbolo} — RECHAZADO: mercado lateral, esperando tendencia clara")
         return
 
-    # Opera en bajista y lateral
-    t_operacion = "bajista"
-    _trade_ema_rsi(simbolo, t_operacion, pc, df_4h)
+    # Opera en alcista (LONG) y bajista (SHORT)
+    _trade_ema_rsi(simbolo, t, pc, df_4h)
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
 
