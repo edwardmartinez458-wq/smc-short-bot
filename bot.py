@@ -1555,6 +1555,9 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
+    # EMA89 pendiente (para confirmar estructura LONG)
+    ema89_prev = ema89.iloc[-5]
+
     # RSI en 1H — reactivo a movimientos recientes
     df_1h = velas(simbolo, "60", 60)
     if df_1h.empty or len(df_1h) < 30:
@@ -1571,6 +1574,9 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     if t == "alcista":
         if ema21_v <= ema89_v:
             log.info(f"{simbolo} — RECHAZADO: EMA21 < EMA89 (sin estructura alcista 4H)")
+            return
+        if ema89_v <= ema89_prev:
+            log.info(f"{simbolo} — RECHAZADO: EMA89 no esta subiendo (tendencia debil)")
             return
         if rsi < 35 or rsi > 75:
             log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (35-75)")
