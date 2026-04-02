@@ -1377,15 +1377,17 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     ema21_v = ema21.iloc[-1]
     ema89_v = ema89.iloc[-1]
 
-    # RSI, ADX y divergencia en 1H — mas reactivos a movimientos recientes
+    # RSI en 1H — reactivo a movimientos recientes
     df_1h = velas(simbolo, "60", 60)
     if df_1h.empty or len(df_1h) < 30:
         log.info(f"{simbolo} — sin suficientes velas 1H")
         return
     rsi = calcular_rsi(df_1h)
-    adx = calcular_adx(df_1h)
 
-    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 1H={adx:.1f}")
+    # ADX en 4H — más estable, confirma tendencia real sin ruido de 1H
+    adx = calcular_adx(df_4h)
+
+    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 4H={adx:.1f}")
 
     # SHORT: EMA21 < EMA89 + RSI 32-55
     if ema21_v >= ema89_v:
