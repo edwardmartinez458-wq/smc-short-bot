@@ -1,11 +1,13 @@
 """
 SMC Trading Bot — Smart Money Concepts
 Exchange: BingX Perpetual Futures
-Estrategia: EMA21 + EMA89 + RSI14 (solo bajista)
+Estrategia: EMA21 + EMA89 + RSI14 bidireccional (LONG alcista / SHORT bajista)
 Servidor: Railway 24/7
-- Solo abre SHORT cuando EMA21 < EMA89 + RSI 30-55
-- Monitor Trump y Fed activo
-- Capital independiente del bot LONG
+- LONG cuando EMA21 > EMA89 + tendencia alcista
+- SHORT cuando EMA21 < EMA89 + tendencia bajista
+- ADX 4H >= 20 | RSI 1H en rango | ATR 4H >= 1.5%
+- Monitor Trump, Fed, CoinGlass, memoria de aprendizaje
+- Capital independiente del bot KuCoin
 """
 
 import os, time, logging, requests, hmac, hashlib, json, threading, random
@@ -1773,30 +1775,34 @@ def verificar_inicio():
             simbolo  = pk.get("symbol", "")
             pos_side = pk.get("positionSide", "LONG")
             dir_     = "SHORT" if pos_side == "SHORT" else "LONG"
-            if dir_ == "LONG":
-                log.info(f"Inicio: ignorando posicion LONG {simbolo}")
-                continue
-            entrada = float(pk.get("avgPrice", 0))
-            amt     = float(pk.get("positionAmt", 0))
-            _df4h_i = velas(simbolo, "240", 30)
-            _atr_i  = calcular_atr(_df4h_i) if not _df4h_i.empty else 0
-            _sl_d_i = max(_atr_i * 2, entrada * 0.03)
-            _tp_d_i = max(_atr_i * 3.0, entrada * 0.03)
-            sl = round(entrada + _sl_d_i, 6)
-            tp = round(entrada - _tp_d_i, 6)
-            lev = estado["apalancamiento"]
+            entrada  = float(pk.get("avgPrice", 0))
+            amt      = float(pk.get("positionAmt", 0))
+            _df4h_i  = velas(simbolo, "240", 30)
+            _atr_i   = calcular_atr(_df4h_i) if not _df4h_i.empty else 0
+            _sl_d_i  = max(_atr_i * 2, entrada * 0.03)
+            _tp_d_i  = max(_atr_i * 3.0, entrada * 0.03)
+            # SL y TP dependen de la direccion
+            if dir_ == "SHORT":
+                sl = round(entrada + _sl_d_i, 6)
+                tp = round(entrada - _tp_d_i, 6)
+            else:
+                sl = round(entrada - _sl_d_i, 6)
+                tp = round(entrada + _tp_d_i, 6)
+            lev    = estado["apalancamiento"]
             margen = amt * entrada / lev if lev else 0
             ya_existe = any(p["simbolo"] == simbolo for p in estado["posiciones"])
             if not ya_existe:
                 pc_actual = precio(simbolo)
-                # Si el precio ya rompió el SL — cerrar inmediatamente, no monitorear
-                if dir_ == "SHORT" and pc_actual >= sl:
-                    log.warning(f"POSICION RECUPERADA {simbolo} SHORT ya superó SL (${pc_actual:.4f} >= ${sl:.4f}) — cerrando")
-                    tg(f"Posicion {simbolo} SHORT recuperada ya superó SL — cerrando automaticamente")
+                # Si el precio ya rompió el SL — cerrar inmediatamente
+                sl_roto = (dir_ == "SHORT" and pc_actual >= sl) or (dir_ == "LONG" and pc_actual <= sl)
+                if sl_roto:
+                    close_side = "BUY" if dir_ == "SHORT" else "SELL"
+                    log.warning(f"POSICION RECUPERADA {simbolo} {dir_} ya superó SL (${pc_actual:.4f}) — cerrando")
+                    tg(f"Posicion {simbolo} {dir_} recuperada ya superó SL — cerrando automaticamente")
                     try:
                         bx_post("/openApi/swap/v2/trade/order", {
-                            "symbol": simbolo, "side": "BUY",
-                            "positionSide": "SHORT", "type": "MARKET",
+                            "symbol": simbolo, "side": close_side,
+                            "positionSide": pos_side, "type": "MARKET",
                             "closePosition": "true",
                         })
                     except Exception as e:
@@ -1806,26 +1812,12 @@ def verificar_inicio():
                     "simbolo": simbolo, "dir": dir_, "entrada": entrada,
                     "sl": sl, "tp": tp, "sl_oid": None, "tp_oid": None,
                     "cantidad": amt, "margen": round(margen, 2),
-                    "g_pot": round(margen * (_tp_d_i / entrada), 2), "p_pot": round(margen * (_sl_d_i / entrada), 2),
+                    "g_pot": round(margen * (_tp_d_i / entrada), 2),
+                    "p_pot": round(margen * (_sl_d_i / entrada), 2),
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} SL=${sl:.4f} TP=${tp:.4f}")
                 tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}")
-                # Si posicion recuperada va contra la direccion del bot (SHORT only) — cerrar
-                if dir_ == "LONG":
-                    log.warning(f"Posicion recuperada LONG en bot SHORT — cerrando {simbolo}")
-                    tg(f"Posicion LONG recuperada en {simbolo} va contra bot SHORT — cerrando automaticamente")
-                    try:
-                        bx_post("/openApi/swap/v2/trade/order", {
-                            "symbol":       simbolo,
-                            "side":         "SELL",
-                            "positionSide": "LONG",
-                            "type":         "MARKET",
-                            "closePosition": "true",
-                        })
-                    except Exception as e:
-                        log.error(f"Error cerrando posicion recuperada LONG: {e}")
-                    continue
         if pos_bx:
             tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bx)} posicion(es).")
         else:
