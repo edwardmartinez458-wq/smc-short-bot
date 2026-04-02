@@ -1583,8 +1583,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     # ATR minimo 4H
     atr = calcular_atr(df_4h)
-    if atr / pc < 0.005:
-        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 0.5%")
+    if atr / pc < 0.015:
+        log.info(f"{simbolo} — RECHAZADO: ATR 4H {atr/pc*100:.2f}% < 1.5%")
         return
 
     # ADX >= 20
