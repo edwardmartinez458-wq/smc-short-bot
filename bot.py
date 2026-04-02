@@ -5,7 +5,7 @@ Estrategia: EMA21 + EMA89 + RSI14 bidireccional (LONG alcista / SHORT bajista)
 Servidor: Railway 24/7
 - LONG cuando EMA21 > EMA89 + tendencia alcista
 - SHORT cuando EMA21 < EMA89 + tendencia bajista
-- ADX 4H >= 20 | RSI 1H en rango | ATR 4H >= 1.5%
+- ADX 1H >= 20 | RSI 1H en rango | ATR 4H >= 1.5%
 - Monitor Trump, Fed, CoinGlass, memoria de aprendizaje
 - Capital independiente del bot KuCoin
 """
@@ -1562,10 +1562,10 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         return
     rsi = calcular_rsi(df_1h)
 
-    # ADX en 4H — más estable, confirma tendencia real sin ruido de 1H
-    adx = calcular_adx(df_4h)
+    # ADX en 1H — igual que KuCoin, más reactivo a movimientos reales
+    adx = calcular_adx(df_1h)
 
-    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 4H={adx:.1f}")
+    log.info(f"{simbolo} — EMA21=${ema21_v:.4f} EMA89=${ema89_v:.4f} | RSI 1H={rsi:.1f} ADX 1H={adx:.1f}")
 
     # Verificar estructura 4H segun tendencia
     if t == "alcista":
@@ -1591,7 +1591,7 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
 
     # ADX >= 20
     if adx < 20:
-        log.info(f"{simbolo} — RECHAZADO: ADX 4H {adx:.1f} < 20 (tendencia debil)")
+        log.info(f"{simbolo} — RECHAZADO: ADX 1H {adx:.1f} < 20 (tendencia debil)")
         return
 
     # Sin divergencia RSI 1H
