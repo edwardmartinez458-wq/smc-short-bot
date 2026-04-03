@@ -1715,7 +1715,7 @@ def analizar(simbolo: str):
         return
 
     df_d  = velas_binance(simbolo, 50)
-    df_4h = velas(simbolo, "240",  200)
+    df_4h = velas(simbolo, "240",  500)
     if df_d.empty or df_4h.empty:
         log.info(f"{simbolo} — sin datos de velas")
         return
