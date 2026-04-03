@@ -644,6 +644,7 @@ def velas(simbolo: str, intervalo: str, limit: int = 200) -> pd.DataFrame:
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        df = df.sort_values("ts").reset_index(drop=True)
         return df[["ts", "open", "high", "low", "close", "volume"]].tail(limit).reset_index(drop=True)
     except Exception as e:
         log.error(f"Velas {simbolo}: {e}")
