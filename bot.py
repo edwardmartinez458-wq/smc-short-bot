@@ -1302,11 +1302,11 @@ def abrir(simbolo, t, pc, ia, rsi=0, adx=0, ema21=0, ema89=0, atr=0):
 
     confianza = ia.get("confianza", 50)
     if confianza >= 76:
-        capital_pct = 1.00  # 100% — confianza alta
+        capital_pct = 0.60  # 60% — confianza alta
     elif confianza >= 62:
-        capital_pct = 0.70  # 70% — confianza media
+        capital_pct = 0.45  # 45% — confianza media
     else:
-        capital_pct = 0.40  # 40% — confianza baja
+        capital_pct = 0.30  # 30% — confianza baja
     riesgo_usdt = estado["capital"] * capital_pct * sl_pct
     log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% | riesgo max ${riesgo_usdt:.2f}")
 
