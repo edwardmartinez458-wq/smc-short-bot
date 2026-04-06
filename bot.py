@@ -1488,6 +1488,21 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
+    # Cierre activo en BingX si fue forzado por tendencia BTC o posicion recuperada sin ordenes reales
+    if tendencia_invertida or p.get("tipo") == "recuperada":
+        close_side = "BUY" if p["dir"] == "SHORT" else "SELL"
+        try:
+            bx_post("/openApi/swap/v2/trade/order", {
+                "symbol":        p["simbolo"],
+                "side":          close_side,
+                "positionSide":  p["dir"],
+                "type":          "MARKET",
+                "closePosition": "true",
+            })
+            log.info(f"{p['simbolo']} — cerrado en BingX ({'tendencia BTC invertida' if tendencia_invertida else 'posicion recuperada'})")
+        except Exception as e:
+            log.error(f"Error cerrando {p['simbolo']} en BingX: {e}")
+
     guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl, resultado, p.get("confianza_ia", 0))
     guardar_memoria_trade(p, pc, resultado, pnl)
 
