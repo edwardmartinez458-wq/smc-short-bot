@@ -31,7 +31,7 @@ COINGLASS_API_KEY  = os.getenv("COINGLASS_API_KEY", "")
 
 # Pares BingX Perpetual Futures (solo SHORT)
 PARES = [
-    "SOL-USDT",
+    "INJ-USDT",
     "XRP-USDT",
     "AVAX-USDT",
     "DOT-USDT",
@@ -41,7 +41,7 @@ PARES = [
 BX_QTY_PRECISION = {
     "BTC-USDT": 3,
     "ETH-USDT": 2,
-    "SOL-USDT": 1,
+    "INJ-USDT": 1,
     "XRP-USDT": 0,
     "AVAX-USDT": 1,
     "DOT-USDT": 0,
