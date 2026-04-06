@@ -108,6 +108,7 @@ estado = {
     "sl_diario_activo":  False,
 }
 lock = threading.Lock()
+_ultima_alerta_manual = {}  # {simbolo: timestamp} cooldown alertas manuales
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
@@ -1742,7 +1743,23 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
+
+    # Calcular EMA4H para alertas manuales
+    ema21_4h = df_4h["close"].ewm(span=21, adjust=False).mean().iloc[-1] if len(df_4h) >= 30 else None
+    ema89_4h = df_4h["close"].ewm(span=89, adjust=False).mean().iloc[-1] if len(df_4h) >= 90 else None
+
+    def _alerta_manual(mensaje):
+        ahora = time.time()
+        if ahora - _ultima_alerta_manual.get(simbolo, 0) >= 4 * 3600:
+            _ultima_alerta_manual[simbolo] = ahora
+            tg(f"⚠️ SEÑAL MANUAL {simbolo}\n{mensaje}\nPrecio: ${pc:.4f}")
+
     if t == "lateral":
+        if ema21_4h and ema89_4h:
+            if ema21_4h > ema89_4h * 1.005:
+                _alerta_manual("Daily lateral pero EMA4H alcista\nConsiderar LONG manual")
+            elif ema21_4h < ema89_4h * 0.995:
+                _alerta_manual("Daily lateral pero EMA4H bajista\nConsiderar SHORT manual")
         log.info(f"{simbolo} — RECHAZADO: mercado lateral, esperando tendencia clara")
         return
 
@@ -1750,6 +1767,8 @@ def analizar(simbolo: str):
     if t == "bajista":
         t_btc = estado.get("tendencia_btc", "lateral")
         if t_btc == "alcista":
+            if ema21_4h and ema89_4h and ema21_4h < ema89_4h:
+                _alerta_manual("Daily bajista + EMA4H bajista\nPero BTC alcista bloquea SHORT\nConsiderar SHORT manual")
             log.info(f"{simbolo} — RECHAZADO: estructura bajista pero BTC es alcista, no abrir SHORT")
             return
 
