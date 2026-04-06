@@ -33,7 +33,7 @@ COINGLASS_API_KEY  = os.getenv("COINGLASS_API_KEY", "")
 PARES = [
     "INJ-USDT",
     "XRP-USDT",
-    "AVAX-USDT",
+    "SUI-USDT",
     "DOT-USDT",
 ]
 
@@ -43,7 +43,7 @@ BX_QTY_PRECISION = {
     "ETH-USDT": 2,
     "INJ-USDT": 1,
     "XRP-USDT": 0,
-    "AVAX-USDT": 1,
+    "SUI-USDT": 1,
     "DOT-USDT": 0,
 }
 
