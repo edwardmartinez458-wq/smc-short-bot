@@ -1456,7 +1456,8 @@ def _cerrar_posicion(p: dict, pc: float):
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
                           (p["dir"] == "LONG"  and t_btc == "bajista")
-    if tendencia_invertida:
+    # No cerrar posiciones manuales (recuperadas) por tendencia BTC — el usuario decide
+    if tendencia_invertida and p.get("tipo") != "recuperada":
         log.info(f"{p['simbolo']} — CIERRE por cambio tendencia BTC ({t_btc}) contra {p['dir']}")
         tp_ok = False
         sl_ok = True
