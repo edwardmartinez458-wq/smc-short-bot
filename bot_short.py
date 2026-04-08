@@ -1655,6 +1655,9 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         if ema21_v >= ema89_v:
             log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
             return
+        if ema89_v >= ema89_prev:
+            log.info(f"{simbolo} — RECHAZADO: EMA89 no esta bajando (tendencia debil)")
+            return
         if rsi > 75 or rsi < 32:
             log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
             return
