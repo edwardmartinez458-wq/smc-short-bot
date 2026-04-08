@@ -1918,7 +1918,9 @@ def verificar_inicio():
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} SL=${sl:.4f} TP=${tp:.4f}")
-                tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}")
+                if simbolo not in _recuperadas_notificadas:
+                    _recuperadas_notificadas.add(simbolo)
+                    tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}\n(El bot la monitorea pero NO la cerrara automaticamente)")
         if pos_bx:
             tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bx)} posicion(es).")
         else:
