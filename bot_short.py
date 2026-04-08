@@ -33,7 +33,7 @@ COINGLASS_API_KEY  = os.getenv("COINGLASS_API_KEY", "")
 PARES = [
     "INJ-USDT",
     "XRP-USDT",
-    "AVAX-USDT",
+    "SUI-USDT",
     "DOT-USDT",
 ]
 
@@ -43,7 +43,7 @@ BX_QTY_PRECISION = {
     "ETH-USDT": 2,
     "INJ-USDT": 1,
     "XRP-USDT": 0,
-    "AVAX-USDT": 1,
+    "SUI-USDT": 1,
     "DOT-USDT": 0,
 }
 
@@ -108,6 +108,7 @@ estado = {
     "sl_diario_activo":  False,
 }
 lock = threading.Lock()
+_ultima_alerta_manual = {}  # {simbolo: timestamp} cooldown alertas manuales
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
@@ -191,7 +192,7 @@ def actualizar_tendencia_btc():
                     estado["tendencia_btc"] = t
         except Exception as e:
             log.error(f"Tendencia BTC: {e}")
-        time.sleep(30 * 60)
+        time.sleep(10 * 60)
 
 # ─── TELEGRAM ────────────────────────────────────────────────────────────────
 
@@ -282,6 +283,7 @@ def manejar_comando(texto: str):
 
 def obtener_posts_trump() -> list:
     urls = [
+        "https://www.trumpstruth.org/feed",
         "https://truthsocial.com/@realDonaldTrump.rss",
         "https://rss.app/feeds/trump-truth-social.xml",
     ]
@@ -1488,6 +1490,21 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
+    # Cierre activo en BingX si fue forzado por tendencia BTC o posicion recuperada sin ordenes reales
+    if tendencia_invertida or p.get("tipo") == "recuperada":
+        close_side = "BUY" if p["dir"] == "SHORT" else "SELL"
+        try:
+            bx_post("/openApi/swap/v2/trade/order", {
+                "symbol":        p["simbolo"],
+                "side":          close_side,
+                "positionSide":  p["dir"],
+                "type":          "MARKET",
+                "closePosition": "true",
+            })
+            log.info(f"{p['simbolo']} — cerrado en BingX ({'tendencia BTC invertida' if tendencia_invertida else 'posicion recuperada'})")
+        except Exception as e:
+            log.error(f"Error cerrando {p['simbolo']} en BingX: {e}")
+
     guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl, resultado, p.get("confianza_ia", 0))
     guardar_memoria_trade(p, pc, resultado, pnl)
 
@@ -1727,11 +1744,36 @@ def analizar(simbolo: str):
 
     t = tendencia(df_d, pc)
     log.info(f"{simbolo} — tendencia Daily: {t} | precio: ${pc:.4f}")
+
+    # Calcular EMA4H para alertas manuales
+    ema21_4h = df_4h["close"].ewm(span=21, adjust=False).mean().iloc[-1] if len(df_4h) >= 30 else None
+    ema89_4h = df_4h["close"].ewm(span=89, adjust=False).mean().iloc[-1] if len(df_4h) >= 90 else None
+
+    def _alerta_manual(mensaje):
+        ahora = time.time()
+        if ahora - _ultima_alerta_manual.get(simbolo, 0) >= 4 * 3600:
+            _ultima_alerta_manual[simbolo] = ahora
+            tg(f"⚠️ SEÑAL MANUAL {simbolo}\n{mensaje}\nPrecio: ${pc:.4f}")
+
     if t == "lateral":
+        if ema21_4h and ema89_4h:
+            if ema21_4h > ema89_4h * 1.005:
+                _alerta_manual("Daily lateral pero EMA4H alcista\nConsiderar LONG manual")
+            elif ema21_4h < ema89_4h * 0.995:
+                _alerta_manual("Daily lateral pero EMA4H bajista\nConsiderar SHORT manual")
         log.info(f"{simbolo} — RECHAZADO: mercado lateral, esperando tendencia clara")
         return
 
-    # Opera en alcista (LONG) y bajista (SHORT)
+    # Si SHORT, verificar que BTC no sea alcista (evita loop abrir/cerrar)
+    if t == "bajista":
+        t_btc = estado.get("tendencia_btc", "lateral")
+        if t_btc == "alcista":
+            if ema21_4h and ema89_4h and ema21_4h < ema89_4h:
+                _alerta_manual("Daily bajista + EMA4H bajista\nPero BTC alcista bloquea SHORT\nConsiderar SHORT manual")
+            log.info(f"{simbolo} — RECHAZADO: estructura bajista pero BTC es alcista, no abrir SHORT")
+            return
+
+    # Opera LONG en alcista y SHORT en bajista
     _trade_ema_rsi(simbolo, t, pc, df_4h)
 
 # ─── REPORTE ──────────────────────────────────────────────────────────────────
