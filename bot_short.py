@@ -109,6 +109,7 @@ estado = {
 }
 lock = threading.Lock()
 _ultima_alerta_manual = {}  # {simbolo: timestamp} cooldown alertas manuales
+_recuperadas_notificadas = set()  # simbolos ya notificados como recuperados (evita spam)
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
@@ -1490,8 +1491,8 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
-    # Cierre activo en BingX si fue forzado por tendencia BTC o posicion recuperada sin ordenes reales
-    if tendencia_invertida or p.get("tipo") == "recuperada":
+    # Cierre activo en BingX si fue forzado por tendencia BTC (no auto-cerrar recuperadas)
+    if tendencia_invertida:
         close_side = "BUY" if p["dir"] == "SHORT" else "SELL"
         try:
             bx_post("/openApi/swap/v2/trade/order", {
@@ -1505,6 +1506,7 @@ def _cerrar_posicion(p: dict, pc: float):
         except Exception as e:
             log.error(f"Error cerrando {p['simbolo']} en BingX: {e}")
 
+    _recuperadas_notificadas.discard(p["simbolo"])
     guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl, resultado, p.get("confianza_ia", 0))
     guardar_memoria_trade(p, pc, resultado, pnl)
 
@@ -1584,7 +1586,9 @@ def _sincronizar_con_bingx():
                     "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
             log.warning(f"Sync: POSICION RECUPERADA {simbolo} {dir_} entrada=${entrada:.4f}")
-            tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}")
+            if simbolo not in _recuperadas_notificadas:
+                _recuperadas_notificadas.add(simbolo)
+                tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}\n(El bot la monitorea pero NO la cerrara automaticamente)")
 
     except Exception as e:
         log.error(f"Sincronizacion BingX: {e}")
