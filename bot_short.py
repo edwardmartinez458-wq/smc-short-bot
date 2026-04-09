@@ -771,12 +771,15 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
     return sl_oid, tp_oid
 
 def balance_bingx() -> float:
+    """Retorna el equity total (balance + PnL no realizado) igual que KuCoin."""
     try:
         result = bx_get("/openApi/swap/v2/user/balance")
         data = result.get("data", {})
         if isinstance(data, dict):
             bal_obj = data.get("balance", {})
-            return float(bal_obj.get("balance", 0))
+            # equity = balance base + unrealizedProfit (igual que KuCoin accountEquity)
+            equity = float(bal_obj.get("equity", bal_obj.get("balance", 0)))
+            return equity
     except Exception as e:
         log.error(f"Balance BingX: {e}")
     return 0.0
