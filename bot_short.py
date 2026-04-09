@@ -1492,9 +1492,15 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
-    # Cierre activo en BingX si fue forzado por tendencia BTC (no auto-cerrar recuperadas)
-    if tendencia_invertida:
+    # Cierre activo en BingX — tendencia invertida O TP2 hit (TP2 es software-only en BingX)
+    if tendencia_invertida or (tp_ok and p.get("tp1_hit")):
         close_side = "BUY" if p["dir"] == "SHORT" else "SELL"
+        # Cancelar SL pendiente antes de cerrar
+        if p.get("sl_oid"):
+            try:
+                bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
+            except Exception as e:
+                log.error(f"Error cancelando SL pendiente {p['simbolo']}: {e}")
         try:
             bx_post("/openApi/swap/v2/trade/order", {
                 "symbol":        p["simbolo"],
@@ -1503,7 +1509,8 @@ def _cerrar_posicion(p: dict, pc: float):
                 "type":          "MARKET",
                 "closePosition": "true",
             })
-            log.info(f"{p['simbolo']} — cerrado en BingX ({'tendencia BTC invertida' if tendencia_invertida else 'posicion recuperada'})")
+            razon = "tendencia BTC invertida" if tendencia_invertida else "TP2 alcanzado"
+            log.info(f"{p['simbolo']} — cerrado en BingX ({razon})")
         except Exception as e:
             log.error(f"Error cerrando {p['simbolo']} en BingX: {e}")
 
