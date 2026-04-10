@@ -109,6 +109,7 @@ estado = {
 }
 lock = threading.Lock()
 _ultima_alerta_manual = {}  # {simbolo: timestamp} cooldown alertas manuales
+_recuperadas_notificadas = set()  # simbolos ya notificados como recuperados (evita spam)
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
@@ -283,6 +284,7 @@ def manejar_comando(texto: str):
 
 def obtener_posts_trump() -> list:
     urls = [
+        "https://www.trumpstruth.org/feed",
         "https://truthsocial.com/@realDonaldTrump.rss",
         "https://rss.app/feeds/trump-truth-social.xml",
     ]
@@ -769,12 +771,15 @@ def ejecutar_orden(simbolo: str, lado: str, cantidad: float, sl: float, tp: floa
     return sl_oid, tp_oid
 
 def balance_bingx() -> float:
+    """Retorna el equity total (balance + PnL no realizado) igual que KuCoin."""
     try:
         result = bx_get("/openApi/swap/v2/user/balance")
         data = result.get("data", {})
         if isinstance(data, dict):
             bal_obj = data.get("balance", {})
-            return float(bal_obj.get("balance", 0))
+            # equity = balance base + unrealizedProfit (igual que KuCoin accountEquity)
+            equity = float(bal_obj.get("equity", bal_obj.get("balance", 0)))
+            return equity
     except Exception as e:
         log.error(f"Balance BingX: {e}")
     return 0.0
@@ -1454,7 +1459,8 @@ def _cerrar_posicion(p: dict, pc: float):
     t_btc = estado.get("tendencia_btc", "lateral")
     tendencia_invertida = (p["dir"] == "SHORT" and t_btc == "alcista") or \
                           (p["dir"] == "LONG"  and t_btc == "bajista")
-    if tendencia_invertida:
+    # No cerrar posiciones manuales (recuperadas) por tendencia BTC — el usuario decide
+    if tendencia_invertida and p.get("tipo") != "recuperada":
         log.info(f"{p['simbolo']} — CIERRE por cambio tendencia BTC ({t_btc}) contra {p['dir']}")
         tp_ok = False
         sl_ok = True
@@ -1489,9 +1495,15 @@ def _cerrar_posicion(p: dict, pc: float):
         ops_g = estado["ops_ganadas"]
         cap   = estado["capital"]
 
-    # Cierre activo en BingX si fue forzado por tendencia BTC o posicion recuperada sin ordenes reales
-    if tendencia_invertida or p.get("tipo") == "recuperada":
+    # Cierre activo en BingX — tendencia invertida O TP2 hit (TP2 es software-only en BingX)
+    if tendencia_invertida or (tp_ok and p.get("tp1_hit")):
         close_side = "BUY" if p["dir"] == "SHORT" else "SELL"
+        # Cancelar SL pendiente antes de cerrar
+        if p.get("sl_oid"):
+            try:
+                bx_delete("/openApi/swap/v2/trade/order", {"symbol": p["simbolo"], "clientOrderID": p["sl_oid"]})
+            except Exception as e:
+                log.error(f"Error cancelando SL pendiente {p['simbolo']}: {e}")
         try:
             bx_post("/openApi/swap/v2/trade/order", {
                 "symbol":        p["simbolo"],
@@ -1500,10 +1512,12 @@ def _cerrar_posicion(p: dict, pc: float):
                 "type":          "MARKET",
                 "closePosition": "true",
             })
-            log.info(f"{p['simbolo']} — cerrado en BingX ({'tendencia BTC invertida' if tendencia_invertida else 'posicion recuperada'})")
+            razon = "tendencia BTC invertida" if tendencia_invertida else "TP2 alcanzado"
+            log.info(f"{p['simbolo']} — cerrado en BingX ({razon})")
         except Exception as e:
             log.error(f"Error cerrando {p['simbolo']} en BingX: {e}")
 
+    _recuperadas_notificadas.discard(p["simbolo"])
     guardar_historial(p["simbolo"], p["dir"], p["entrada"], pc, pnl, resultado, p.get("confianza_ia", 0))
     guardar_memoria_trade(p, pc, resultado, pnl)
 
@@ -1583,7 +1597,9 @@ def _sincronizar_con_bingx():
                     "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
             log.warning(f"Sync: POSICION RECUPERADA {simbolo} {dir_} entrada=${entrada:.4f}")
-            tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}")
+            if simbolo not in _recuperadas_notificadas:
+                _recuperadas_notificadas.add(simbolo)
+                tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl} | TP ${tp}\n(El bot la monitorea pero NO la cerrara automaticamente)")
 
     except Exception as e:
         log.error(f"Sincronizacion BingX: {e}")
@@ -1642,12 +1658,15 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
         if ema89_v <= ema89_prev:
             log.info(f"{simbolo} — RECHAZADO: EMA89 no esta subiendo (tendencia debil)")
             return
-        if rsi < 35 or rsi > 75:
-            log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (35-75)")
+        if rsi < 45 or rsi > 65:
+            log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (45-65)")
             return
     else:
         if ema21_v >= ema89_v:
             log.info(f"{simbolo} — RECHAZADO: EMA21 > EMA89 (sin estructura bajista 4H)")
+            return
+        if ema89_v >= ema89_prev:
+            log.info(f"{simbolo} — RECHAZADO: EMA89 no esta bajando (tendencia debil)")
             return
         if rsi > 75 or rsi < 32:
             log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
@@ -1912,7 +1931,9 @@ def verificar_inicio():
                     "confianza_ia": 0, "tipo": "recuperada", "ts": datetime.now().isoformat(),
                 })
                 log.warning(f"POSICION RECUPERADA: {simbolo} {dir_} entrada=${entrada:.4f} SL=${sl:.4f} TP=${tp:.4f}")
-                tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}")
+                if simbolo not in _recuperadas_notificadas:
+                    _recuperadas_notificadas.add(simbolo)
+                    tg(f"POSICION RECUPERADA: {simbolo} {dir_} @ ${entrada:.4f} | SL ${sl:.4f} | TP ${tp:.4f}\n(El bot la monitorea pero NO la cerrara automaticamente)")
         if pos_bx:
             tg(f"POSICIONES RECUPERADAS tras reinicio: {len(pos_bx)} posicion(es).")
         else:
@@ -2084,13 +2105,17 @@ def api_cerrar_manual():
         if oid:
             bx_delete("/openApi/swap/v2/trade/order", {"symbol": simbolo, "clientOrderID": oid})
     lado_cierre_bx = "BUY" if p["dir"] == "SHORT" else "SELL"
-    bx_post("/openApi/swap/v2/trade/order", {
-        "symbol":       simbolo,
-        "side":         lado_cierre_bx,
-        "positionSide": p["dir"],
-        "type":         "MARKET",
-        "quantity":     str(p.get("cantidad", 1)),
-    })
+    try:
+        r_cierre = bx_post("/openApi/swap/v2/trade/order", {
+            "symbol":        simbolo,
+            "side":          lado_cierre_bx,
+            "positionSide":  p["dir"],
+            "type":          "MARKET",
+            "closePosition": "true",
+        })
+        log.info(f"{simbolo} — orden cierre manual enviada a BingX: {r_cierre}")
+    except Exception as e:
+        log.error(f"Error cerrando {simbolo} en BingX: {e}")
     with lock:
         estado["posiciones"] = [x for x in estado["posiciones"] if x["simbolo"] != simbolo]
     pnl_estimado = round((p["entrada"] - pc) / p["entrada"] * p.get("margen", 1), 2) if p["dir"] == "SHORT" \
