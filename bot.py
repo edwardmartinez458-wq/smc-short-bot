@@ -110,6 +110,7 @@ estado = {
 lock = threading.Lock()
 _ultima_alerta_manual = {}  # {simbolo: timestamp} cooldown alertas manuales
 _recuperadas_notificadas = set()  # simbolos ya notificados como recuperados (evita spam)
+_cerradas_manual = {}  # {simbolo: timestamp} cooldown 30min tras cierre manual
 
 # ─── UTILIDADES HORARIO ───────────────────────────────────────────────────────
 
@@ -1744,6 +1745,12 @@ def analizar(simbolo: str):
         if any(p["simbolo"] == simbolo for p in estado["posiciones"]):
             log.info(f"{simbolo} — bloqueado: ya tiene posicion abierta")
             return
+        if simbolo in _cerradas_manual:
+            transcurrido = time.time() - _cerradas_manual[simbolo]
+            if transcurrido < 1800:
+                restante = int(1800 - transcurrido)
+                log.info(f"{simbolo} — bloqueado: cooldown 30min tras cierre manual ({restante}s restantes)")
+                return
 
     if not en_horario_operacion():
         log.info(f"{simbolo} — fuera de horario ({hora_venezuela()}h Venezuela)")
@@ -2118,6 +2125,7 @@ def api_cerrar_manual():
         log.error(f"Error cerrando {simbolo} en BingX: {e}")
     with lock:
         estado["posiciones"] = [x for x in estado["posiciones"] if x["simbolo"] != simbolo]
+        _cerradas_manual[simbolo] = time.time()  # cooldown 30 min
     pnl_estimado = round((p["entrada"] - pc) / p["entrada"] * p.get("margen", 1), 2) if p["dir"] == "SHORT" \
                    else round((pc - p["entrada"]) / p["entrada"] * p.get("margen", 1), 2)
     resultado = "ganado" if pnl_estimado > 0 else "perdido"
