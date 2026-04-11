@@ -35,6 +35,7 @@ PARES = [
     "XRP-USDT",
     "SUI-USDT",
     "DOT-USDT",
+    "APT-USDT",
 ]
 
 # Precision de cantidad por par
@@ -45,6 +46,7 @@ BX_QTY_PRECISION = {
     "XRP-USDT": 0,
     "SUI-USDT": 1,
     "DOT-USDT": 0,
+    "APT-USDT": 1,
 }
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
