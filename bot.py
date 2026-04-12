@@ -1340,14 +1340,9 @@ def abrir(simbolo, t, pc, ia, rsi=0, adx=0, ema21=0, ema89=0, atr=0):
     log.info(f"{simbolo} — ATR {atr_val:.4f} → SL ${sl:.4f} | TP ${tp1:.4f} (R:R 1:1) [{dir_txt}]")
 
     confianza = ia.get("confianza", 50)
-    if confianza >= 76:
-        capital_pct = 0.60  # 60% — confianza alta
-    elif confianza >= 62:
-        capital_pct = 0.45  # 45% — confianza media
-    else:
-        capital_pct = 0.30  # 30% — confianza baja
+    capital_pct = 0.15  # 15% fijo — backtest confirma mejor DD y mayor PnL largo plazo
     riesgo_usdt = estado["capital"] * capital_pct * sl_pct
-    log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% | riesgo max ${riesgo_usdt:.2f}")
+    log.info(f"{simbolo} — confianza {confianza}% → capital {capital_pct*100:.0f}% (fijo) | riesgo max ${riesgo_usdt:.2f}")
 
     margen = round(estado["capital"] * capital_pct, 2)
     cant   = calcular_cantidad(simbolo, pc, capital_pct)
