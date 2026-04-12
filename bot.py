@@ -34,7 +34,6 @@ PARES = [
     "INJ-USDT",
     "XRP-USDT",
     "SUI-USDT",
-    "DOT-USDT",
     "APT-USDT",
     "POL-USDT",
 ]
