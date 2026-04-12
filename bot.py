@@ -32,10 +32,10 @@ COINGLASS_API_KEY  = os.getenv("COINGLASS_API_KEY", "")
 # Pares BingX Perpetual Futures (solo SHORT)
 PARES = [
     "INJ-USDT",
-    "XRP-USDT",
     "SUI-USDT",
     "APT-USDT",
     "POL-USDT",
+    "SOL-USDT",
 ]
 
 # Precision de cantidad por par
@@ -43,11 +43,11 @@ BX_QTY_PRECISION = {
     "BTC-USDT": 3,
     "ETH-USDT": 2,
     "INJ-USDT": 1,
-    "XRP-USDT": 0,
     "SUI-USDT": 1,
     "DOT-USDT": 0,
     "APT-USDT": 1,
     "POL-USDT": 0,
+    "SOL-USDT": 2,
 }
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
@@ -1757,6 +1757,18 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
     if not ia["entrar"]:
         log.info(f"{simbolo} — RECHAZADO por IA ({ia['confianza']}%): {ia['razon']}")
         return
+
+    # Filtro Fear & Greed dinamico
+    try:
+        fg_raw = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
+        fg_val = int(fg_raw["data"][0]["value"])
+    except Exception:
+        fg_val = 50  # neutro si falla la API
+    umbral_fg = 75 if fg_val <= 20 else 65
+    if ia["confianza"] < umbral_fg:
+        log.info(f"{simbolo} — RECHAZADO: F&G={fg_val} → umbral IA={umbral_fg}% | confianza={ia['confianza']}%")
+        return
+    log.info(f"{simbolo} — F&G={fg_val} → umbral={umbral_fg}% OK | confianza={ia['confianza']}%")
 
     dir_txt = "LONG" if t == "alcista" else "SHORT"
     log.info(f"{simbolo} — IA APRUEBA {ia['confianza']}% — EJECUTANDO {dir_txt}")
