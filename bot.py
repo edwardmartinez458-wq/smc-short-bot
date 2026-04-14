@@ -36,6 +36,7 @@ PARES = [
     "APT-USDT",
     "POL-USDT",
     "SOL-USDT",
+    "AVAX-USDT",
 ]
 
 # Precision de cantidad por par
@@ -48,6 +49,7 @@ BX_QTY_PRECISION = {
     "APT-USDT": 1,
     "POL-USDT": 0,
     "SOL-USDT": 2,
+    "AVAX-USDT": 1,
 }
 
 CAPITAL_TOTAL  = float(os.getenv("CAPITAL_TOTAL", "100"))
@@ -1429,7 +1431,7 @@ def _cerrar_posicion(p: dict, pc: float):
                 "closePosition": "true",
                 "clientOrderID": nuevo_sl_oid,
             })
-            PARES_SIN_TRAILING = {"INJ-USDT"}
+            PARES_SIN_TRAILING = {"INJ-USDT", "AVAX-USDT"}
             with lock:
                 p["tp1_hit"]       = True
                 p["trailing_activo"] = p["simbolo"] not in PARES_SIN_TRAILING
