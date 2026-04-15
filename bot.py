@@ -1766,8 +1766,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
             if ema21_v <= ema21.iloc[-3]:
                 log.info(f"{simbolo} — RECHAZADO (momentum): EMA21 no esta subiendo")
                 return
-            if rsi < 30 or rsi > 80:
-                log.info(f"{simbolo} — RECHAZADO (momentum): RSI 1H {rsi:.1f} fuera de rango LONG momentum (30-80)")
+            if rsi < 28 or rsi > 82:
+                log.info(f"{simbolo} — RECHAZADO (momentum): RSI 1H {rsi:.1f} fuera de rango LONG momentum (28-82)")
                 return
             if btc_mov_pct < 0:
                 log.info(f"{simbolo} — RECHAZADO (momentum): BTC bajando pero señal es LONG")
@@ -1779,8 +1779,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
             if ema89_v <= ema89_prev:
                 log.info(f"{simbolo} — RECHAZADO: EMA89 no esta subiendo (tendencia debil)")
                 return
-            if rsi < 45 or rsi > 65:
-                log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (45-65)")
+            if rsi < 40 or rsi > 75:
+                log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango LONG (40-75)")
                 return
     else:
         if modo_momentum:
@@ -1790,8 +1790,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
             if ema21_v >= ema21.iloc[-3]:
                 log.info(f"{simbolo} — RECHAZADO (momentum): EMA21 no esta bajando")
                 return
-            if rsi > 70 or rsi < 20:
-                log.info(f"{simbolo} — RECHAZADO (momentum): RSI 1H {rsi:.1f} fuera de rango SHORT momentum (20-70)")
+            if rsi > 65 or rsi < 18:
+                log.info(f"{simbolo} — RECHAZADO (momentum): RSI 1H {rsi:.1f} fuera de rango SHORT momentum (18-65)")
                 return
             if btc_mov_pct > 0:
                 log.info(f"{simbolo} — RECHAZADO (momentum): BTC subiendo pero señal es SHORT")
@@ -1803,8 +1803,8 @@ def _trade_ema_rsi(simbolo, t, pc, df_4h):
             if ema89_v >= ema89_prev:
                 log.info(f"{simbolo} — RECHAZADO: EMA89 no esta bajando (tendencia debil)")
                 return
-            if rsi > 75 or rsi < 32:
-                log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (32-75)")
+            if rsi > 60 or rsi < 25:
+                log.info(f"{simbolo} — RECHAZADO: RSI 1H {rsi:.1f} fuera de rango SHORT (25-60)")
                 return
 
     # ATR minimo 4H
